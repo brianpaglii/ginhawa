@@ -155,10 +155,7 @@ believe a rule must be broken, stop and tell me before doing anything.
 - **Never store patient data unencrypted at rest.** Local SQLite is
   always opened via SQLCipher with the derived passphrase. Cloud
   Postgres relies on the hosting provider's at-rest encryption.
-- **Never bypass the audit_log triggers.** Every mutation of citizens,
-  sessions, or measurements MUST go through the data-access layer
-  which writes audit_log entries via database triggers. Direct
-  DB-level INSERT/UPDATE/DELETE that skips triggers is forbidden.
+- **Never bypass the record_audit helper for mutations or sensitive reads**. The application is the sole writer of audit_log for both mutations and sensitive reads (citizen views, exports, login events). Every mutation handler and every sensitive-read handler calls services.audit.record_audit() in the same transaction as its main operation; if the audit write fails, the operation rolls back. The database enforces append-only via the audit_log_no_update and audit_log_no_delete triggers and by revoking UPDATE/DELETE on audit_log from the application's database role.
 - **Never hard-delete a citizen who has any sessions.** Soft-delete
   via `is_active = 0`. Hard-delete only after retention period
   expiry, and CASCADE through sessions and measurements per the
@@ -170,6 +167,7 @@ believe a rule must be broken, stop and tell me before doing anything.
 - **Never commit `.env`, secrets, SQLCipher passphrases, BLE pairing
   keys, JWT secrets, or any production credential.** `.env.example`
   is the only environment file that goes in git.
+- **Never re-add automatic audit triggers to the patient-data tables (citizens, sessions, measurements).** A previous design used database triggers to write audit rows on mutation; this was removed because triggers cannot capture rich actor context (which BHW, which IP, which session, what reasoning). See ADR-0005 for the full rationale. The application-layer record_audit helper is the only correct path.
 
 ### Schema and migrations
 
