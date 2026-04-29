@@ -27,11 +27,14 @@ has a realistic audit history after seeding.
 
 Deferred
 --------
-The original Phase 1 plan also called for seeding a device credential.
-That is skipped here because the ``device_credentials`` table does not
-exist yet — it will be added with the kiosk-sync feature (originally
-Phase 1 Prompt 9). The script's stdout makes the deferral explicit at
-end-of-run.
+Device credential seeding is deferred to the Phase 1.5 verification
+milestone (the smoke-test commit). The ``device_credentials`` table
+now exists (added in commit f566915403f9) along with the admin-only
+management endpoints, but the dev credential is intentionally seeded
+as part of the Phase 1.5 final commit so the smoke test can
+demonstrate the full credential lifecycle (create → authenticate →
+revoke) end-to-end against fresh data. The script's stdout makes
+this deferral explicit at end-of-run.
 
 Credentials produced (DEV ONLY — DO NOT USE IN PROD)
 ----------------------------------------------------
@@ -735,9 +738,11 @@ def _print_summary(  # pragma: no cover
     print(f"  bhw_pinaglabanan / {_BHW_PASSWORD}")
     print(f"  bhw_corazon      / {_BHW_PASSWORD}")
     print()
-    print("[DEFERRED] Device credential not seeded — device_credentials table")
-    print("does not exist yet. This will be added when the kiosk sync feature")
-    print("(originally Phase 1 Prompt 9) is implemented. Tracked in ADR-XXXX.")
+    print("[DEFERRED] Device credential not seeded. The device_credentials")
+    print("table now exists, but the dev credential is intentionally seeded")
+    print("as part of the Phase 1.5 final commit so the smoke test can")
+    print("demonstrate the full credential lifecycle (create → authenticate")
+    print("→ revoke) against fresh data.")
 
 
 def main() -> int:  # pragma: no cover
