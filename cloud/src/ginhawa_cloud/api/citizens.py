@@ -84,7 +84,14 @@ def get_citizen(
     current_user: User = Depends(require_scope("citizens:read")),
     db: Session = Depends(get_db),
 ) -> Citizen:
-    citizen = db.get(Citizen, citizen_id)
+    # Mirror the list endpoint's is_active filter: a soft-deleted
+    # citizen is indistinguishable from one that never existed (ADR-0008).
+    citizen = db.execute(
+        select(Citizen).where(
+            Citizen.id == citizen_id,
+            Citizen.is_active == 1,
+        )
+    ).scalar_one_or_none()
     if citizen is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
