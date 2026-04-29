@@ -162,11 +162,6 @@ def list_citizens(
     )
 
 
-_PROTECTED_FIELDS = frozenset(
-    {"id", "rfid_uid", "consent_version", "consent_given_at", "registered_at"}
-)
-
-
 @router.patch("/{citizen_id}", response_model=CitizenRead)
 def update_citizen(
     citizen_id: str,
@@ -182,14 +177,16 @@ def update_citizen(
         )
     assert_citizen_access(citizen, current_user)
 
+    # Pydantic's CitizenUpdate uses extra="forbid", so unknown / protected
+    # fields are rejected at the request boundary with HTTP 422 before we
+    # reach this handler. Anything in `changes` is therefore a declared,
+    # mutable field on the schema.
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
         return citizen
 
     applied: dict[str, object] = {}
     for field, value in changes.items():
-        if field in _PROTECTED_FIELDS:
-            continue
         setattr(citizen, field, value)
         applied[field] = value
 
