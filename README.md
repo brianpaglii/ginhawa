@@ -94,6 +94,26 @@ A local PostgreSQL instance for cloud development is provided via Docker:
 docker compose up -d postgres
 ```
 
+### Seed dev data (cloud)
+
+After Postgres is up and migrations are applied, populate the database
+with a small realistic dataset for local development and smoke
+testing. The seeder is idempotent — safe to re-run:
+
+```bash
+cd cloud
+uv run alembic upgrade head
+uv run python -m ginhawa_cloud.scripts.seed_dev_data
+```
+
+This creates one admin account, three Barangay Health Workers (one
+per seeded barangay), twenty citizens distributed across the three
+barangays, five sample sessions, and fifteen sample measurements —
+plus a realistic `audit_log` history attributed to `actor_type='system'`,
+`actor_id='seed_script'`. The script's stdout prints the seeded
+credentials. **These credentials are dev-only — do not use in
+production.**
+
 ## Repository layout
 
 ```
