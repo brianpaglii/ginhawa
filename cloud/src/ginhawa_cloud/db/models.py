@@ -191,3 +191,39 @@ class User(Base):
     is_active: Mapped[int] = mapped_column(default=1)
     created_at: Mapped[str] = mapped_column(default=_utc_now_iso)
     last_login_at: Mapped[str | None] = mapped_column()
+
+
+class DeviceCredential(Base):
+    """API-key credential for a kiosk authenticating to the cloud sync endpoints.
+
+    The plaintext API key is shown once at creation and never stored — only
+    the argon2id hash is persisted (mirroring how `User.password_hash` is
+    handled). Revocation is the soft-delete pathway: ``revoked_at`` and
+    ``revoked_by`` are set and the row stays for audit. Reactivation is
+    intentionally not supported.
+
+    ``created_by`` and ``revoked_by`` reference user IDs but are NOT
+    declared as SQLAlchemy ``relationship()``s — they're soft references,
+    queried by ID when needed. This decouples credentials from users so a
+    user can be hard-deleted (DPA right-to-erasure) without orphaning the
+    audit story of credentials they created.
+    """
+
+    __tablename__ = "device_credentials"
+    __table_args__ = (
+        Index(
+            "idx_device_credentials_description",
+            "description",
+            unique=True,
+        ),
+        Index("idx_device_credentials_revoked_at", "revoked_at"),
+    )
+
+    device_id: Mapped[str] = mapped_column(primary_key=True)
+    api_key_hash: Mapped[str] = mapped_column()
+    description: Mapped[str] = mapped_column()
+    created_at: Mapped[str] = mapped_column(default=_utc_now_iso)
+    created_by: Mapped[str] = mapped_column()
+    revoked_at: Mapped[str | None] = mapped_column()
+    revoked_by: Mapped[str | None] = mapped_column()
+    last_seen_at: Mapped[str | None] = mapped_column()

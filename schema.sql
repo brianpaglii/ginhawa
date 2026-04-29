@@ -366,6 +366,44 @@ CREATE UNIQUE INDEX idx_users_username ON users(username);
 CREATE INDEX idx_users_role_barangay ON users(role, assigned_barangay);
 
 
+-- -----------------------------------------------------------------------------
+-- device_credentials: API-key credentials for kiosk-to-cloud sync (CLOUD ONLY)
+-- -----------------------------------------------------------------------------
+-- One row per kiosk that authenticates to the cloud sync endpoints. The
+-- plaintext API key is shown to the admin once at creation time and never
+-- stored — only the argon2id hash is persisted, exactly the same way user
+-- passwords are handled. If a key is lost the credential must be revoked
+-- and a new one created; there is no recovery path by design.
+--
+-- Revocation is the soft-delete pathway: revoked_at and revoked_by are set
+-- and the row remains for audit. Reactivation is intentionally unsupported
+-- — a revoked credential is dead, period; new kiosks get new credentials.
+--
+-- created_by / revoked_by hold user IDs but are NOT declared as foreign keys
+-- to users(id). They are soft references; the application looks up actor
+-- detail when rendering a credential's history. Decoupling lets us hard-
+-- delete users (per DPA right-to-erasure) without orphaning credentials.
+--
+-- Like the users table, this DDL is cloud-only; the kiosk Alembic migration
+-- skips it.
+-- -----------------------------------------------------------------------------
+CREATE TABLE device_credentials (
+    device_id           TEXT PRIMARY KEY,
+    api_key_hash        TEXT NOT NULL,
+    description         TEXT NOT NULL,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by          TEXT NOT NULL,
+    revoked_at          TEXT,
+    revoked_by          TEXT,
+    last_seen_at        TEXT
+);
+
+CREATE UNIQUE INDEX idx_device_credentials_description
+    ON device_credentials(description);
+CREATE INDEX idx_device_credentials_revoked_at
+    ON device_credentials(revoked_at);
+
+
 -- =============================================================================
 -- AUDIT WRITES — APPLICATION-LAYER ONLY
 -- =============================================================================

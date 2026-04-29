@@ -336,3 +336,67 @@ class UserRead(BaseModel):
     is_active: int
     created_at: str
     last_login_at: str | None
+
+
+# ---------------------------------------------------------------------------
+# DeviceCredential
+# ---------------------------------------------------------------------------
+# Kiosk-to-cloud sync authentication. The plaintext API key returned by
+# DeviceCredentialCreateResponse is NEVER persisted — only its argon2id
+# hash is stored. If a key is lost, revoke and re-create; there is no
+# recovery path.
+class DeviceCredentialCreate(BaseModel):
+    """Body for ``POST /api/v1/device-credentials``.
+
+    The admin supplies only the human-readable ``description``; the
+    ``device_id`` (UUID) and ``api_key`` (32-byte URL-safe random) are
+    server-generated.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(min_length=1)
+
+
+class DeviceCredentialCreateResponse(BaseModel):
+    """Response from ``POST /api/v1/device-credentials``.
+
+    **CRITICAL**: ``api_key`` is the plaintext credential — capture it at
+    creation time. This is the only response that ever contains the
+    plaintext; the database stores only the argon2id hash. If the key is
+    lost the credential must be revoked and a new one created.
+    """
+
+    device_id: str
+    api_key: str
+    description: str
+    created_at: str
+
+
+class DeviceCredentialRead(BaseModel):
+    """Read-side representation. Never includes the api_key or its hash."""
+
+    model_config = ConfigDict(from_attributes=True, extra="forbid")
+
+    device_id: str
+    description: str
+    created_at: str
+    created_by: str
+    revoked_at: str | None
+    revoked_by: str | None
+    last_seen_at: str | None
+
+
+class DeviceCredentialUpdate(BaseModel):
+    """Body for ``PATCH /api/v1/device-credentials/{device_id}``.
+
+    The only allowed action is revocation. Setting ``revoke=true`` revokes
+    the credential (sets ``revoked_at`` and ``revoked_by``). Setting
+    ``revoke=false`` is a no-op — reactivation is intentionally not
+    supported. A revoked credential is dead, period; new kiosks get new
+    credentials.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    revoke: bool
