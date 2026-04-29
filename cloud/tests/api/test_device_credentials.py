@@ -214,3 +214,22 @@ def test_unauthenticated_request_returns_401(
         json={"revoke": True},
     )
     assert patch_resp.status_code == 401
+
+
+# Verifies that empty-body PATCH is rejected. Would fail if revoke
+# were made optional or if a default value were added to the schema.
+def test_patch_with_empty_body_returns_422(client: TestClient) -> None:
+    created = client.post(
+        "/api/v1/device-credentials",
+        json=_create_payload("kiosk_empty_body"),
+    ).json()
+    device_id = created["device_id"]
+
+    response = client.patch(f"/api/v1/device-credentials/{device_id}", json={})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    # Pydantic returns a list of error objects; the missing required
+    # field is named in `loc`. Asserting on the field name pins the
+    # contract — a future refactor that renamed `revoke` would have to
+    # update this test too.
+    assert any("revoke" in str(error.get("loc", [])) for error in detail)
