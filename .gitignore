@@ -10,6 +10,13 @@ __pycache__/
 .mypy_cache/
 *.egg-info/
 
+# Coverage artifacts (only the markdown snapshots in
+# docs/verification/ are the durable record)
+.coverage
+.coverage.*
+coverage.json
+htmlcov/
+
 # Node
 node_modules/
 dist/
