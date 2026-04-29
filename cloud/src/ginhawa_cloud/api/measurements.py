@@ -60,7 +60,11 @@ def _measurement_in_scope(
     if not _is_scoped_bhw(user):
         return True
     session = db.get(SessionModel, measurement.session_id)
-    if session is None:
+    if session is None:  # pragma: no cover
+        # Defensive: ON DELETE CASCADE on measurements.session_id makes this
+        # branch unreachable via the HTTP API — deleting a session removes
+        # its measurements. Kept as belt-and-suspenders against future
+        # schema changes that loosen the FK.
         return False
     citizen = db.get(Citizen, session.citizen_id)
     return citizen is not None and citizen.barangay == user.assigned_barangay
