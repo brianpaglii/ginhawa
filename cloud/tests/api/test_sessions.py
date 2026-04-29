@@ -143,6 +143,33 @@ def test_patch_terminal_session_returns_400(client: TestClient) -> None:
     assert "terminal" in response.json()["detail"].lower()
 
 
+# Verifies that protected session fields (id, citizen_id, device_id,
+# started_at) cannot be changed via PATCH. Would fail if extra="forbid"
+# were removed from the SessionUpdate schema or if the schema started
+# accepting protected fields.
+def test_patch_session_with_protected_field_returns_422(
+    client: TestClient,
+) -> None:
+    citizen_id = _make_citizen(client)
+    session_id = client.post(
+        "/api/v1/sessions",
+        json={"citizen_id": citizen_id, "device_id": "k1"},
+    ).json()["id"]
+
+    response = client.patch(
+        f"/api/v1/sessions/{session_id}",
+        json={"citizen_id": "00000000-0000-0000-0000-deadbeefdead"},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any("citizen_id" in str(error.get("loc", [])) for error in detail)
+
+    # The session must be unchanged: rejected PATCH leaks no partial state.
+    fetch = client.get(f"/api/v1/sessions/{session_id}")
+    assert fetch.status_code == 200
+    assert fetch.json()["citizen_id"] == citizen_id
+
+
 def test_patch_session_invalid_ended_at_returns_422(client: TestClient) -> None:
     citizen_id = _make_citizen(client)
     session_id = client.post(

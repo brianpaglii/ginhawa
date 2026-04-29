@@ -72,31 +72,52 @@ def test_pagination_respects_limit(client: TestClient) -> None:
     assert body["total"] == 5
 
 
-def test_update_changes_only_allowed_fields(client: TestClient) -> None:
-    created = client.post("/api/v1/citizens", json=_payload(rfid="UPDATE-1")).json()
+# Verifies that protected fields cannot be changed via PATCH. Would
+# fail if extra="forbid" were removed from the CitizenUpdate schema or
+# if the schema started accepting protected fields.
+def test_patch_with_protected_field_returns_422(client: TestClient) -> None:
+    created = client.post("/api/v1/citizens", json=_payload(rfid="PROTECT-1")).json()
     citizen_id = created["id"]
-    original_rfid = created["rfid_uid"]
-    original_consent = created["consent_version"]
 
-    # Send a mix of allowed and protected fields. Protected fields aren't even
-    # declared on CitizenUpdate so Pydantic drops them; the response must still
-    # carry the original values.
     response = client.patch(
         f"/api/v1/citizens/{citizen_id}",
-        json={
-            "full_name": "Maria Clara",
-            "barangay": "New Barangay",
-            "rfid_uid": "SHOULD-NOT-CHANGE",
-            "consent_version": "999.0",
-            "id": "different-id",
-        },
+        json={"rfid_uid": "ATTACKER_VALUE"},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    # Pydantic returns a list of error objects; the offending field is
+    # named in `loc`. We assert the rejection cites rfid_uid by name so
+    # the client knows which field broke the contract.
+    assert any("rfid_uid" in str(error.get("loc", [])) for error in detail)
+
+    # The citizen must be unchanged: the rejected PATCH should not have
+    # leaked any partial update.
+    fetch = client.get(f"/api/v1/citizens/{citizen_id}")
+    assert fetch.status_code == 200
+    assert fetch.json()["rfid_uid"] == "PROTECT-1"
+
+
+# Verifies the happy path of PATCH /citizens/{id}: a body containing
+# only allowed fields succeeds with 200 and applies the changes. Pairs
+# with the 422 test above to cover both sides of the contract.
+# Would fail if the update_citizen handler stopped applying allowed
+# field changes (e.g., the for-loop body or db.commit() were removed).
+def test_patch_with_allowed_fields_returns_200_and_applies(
+    client: TestClient,
+) -> None:
+    created = client.post("/api/v1/citizens", json=_payload(rfid="PATCH-OK-1")).json()
+    citizen_id = created["id"]
+
+    response = client.patch(
+        f"/api/v1/citizens/{citizen_id}",
+        json={"full_name": "Maria Clara", "barangay": "New Barangay"},
     )
     assert response.status_code == 200
     body = response.json()
     assert body["full_name"] == "Maria Clara"
     assert body["barangay"] == "New Barangay"
-    assert body["rfid_uid"] == original_rfid
-    assert body["consent_version"] == original_consent
+    # Untouched fields stay put.
+    assert body["rfid_uid"] == "PATCH-OK-1"
     assert body["id"] == citizen_id
 
 

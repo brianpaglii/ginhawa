@@ -112,6 +112,11 @@ class CitizenCreate(CitizenBase):
 
 
 class CitizenUpdate(BaseModel):
+    # extra="forbid" rejects any field not listed below with HTTP 422.
+    # Fields like id, rfid_uid, consent_version, consent_given_at, and
+    # registered_at are immutable through this endpoint by design.
+    model_config = ConfigDict(extra="forbid")
+
     full_name: str | None = None
     barangay: str | None = None
     phone: str | None = None
@@ -145,8 +150,11 @@ class SessionUpdate(BaseModel):
     ``measurement_path`` is intentionally omitted: the citizen's selection
     at the menu screen is fixed once the session is in progress. Other
     immutable fields (``id``, ``citizen_id``, ``device_id``, ``started_at``)
-    are also absent by construction.
+    are absent here by construction; ``extra="forbid"`` makes any attempt
+    to PATCH them produce HTTP 422 instead of being silently dropped.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     ended_at: str | None = None
     status: SessionStatus | None = None
@@ -198,6 +206,16 @@ class MeasurementCreate(BaseModel):
 
 
 class MeasurementUpdate(BaseModel):
+    # extra="forbid" rejects any field not listed below with HTTP 422.
+    # Measurement core data (id, session_id, type, value, unit,
+    # source_device, measured_at) is immutable by design — corrections
+    # go through PATCH /{id}/invalidate, not through this schema.
+    #
+    # Note: this schema currently has no consuming endpoint. The
+    # extra="forbid" is defensive: when a future route wires
+    # MeasurementUpdate in, the contract is already locked.
+    model_config = ConfigDict(extra="forbid")
+
     is_valid: int | None = None
     validation_notes: str | None = None
 
@@ -291,6 +309,13 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
+    # extra="forbid" rejects any field not listed below with HTTP 422.
+    # username is immutable through this endpoint (a username change
+    # would invalidate audit-log actor_id resolution); password_hash
+    # is server-managed (clients send `password` plaintext, which is
+    # then hashed); id / created_at / last_login_at are server-managed.
+    model_config = ConfigDict(extra="forbid")
+
     password: str | None = None
     full_name: str | None = None
     role: Role | None = None

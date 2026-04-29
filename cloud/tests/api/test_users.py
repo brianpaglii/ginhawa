@@ -112,6 +112,48 @@ def test_admin_patches_user_password_is_hashed(
     assert bad_login.status_code == 401
 
 
+# Verifies that protected user fields cannot be changed via PATCH.
+# Would fail if extra="forbid" were removed from the UserUpdate schema
+# or if the schema started accepting fields like username or
+# password_hash. extra="forbid" is the upstream guard.
+def test_patch_with_protected_field_returns_422(client: TestClient, make_user) -> None:
+    target = make_user(username="bhw_target", password="x", role="bhw")
+
+    response = client.patch(
+        f"/api/v1/users/{target.id}",
+        json={"username": "ATTACKER_NEW_NAME"},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    # Pydantic returns a list of error objects; the offending field is
+    # named in `loc` so the client knows which field broke the contract.
+    assert any("username" in str(error.get("loc", [])) for error in detail)
+
+    # The user must be unchanged: the rejected PATCH leaks no partial state.
+    listed = client.get("/api/v1/users").json()
+    target_data = next(u for u in listed["items"] if u["id"] == target.id)
+    assert target_data["username"] == "bhw_target"
+
+
+# Verifies the same contract for an attempt to set password_hash directly.
+# A client must use the `password` field (plaintext) which the handler
+# argon2-hashes; password_hash is server-managed and protected.
+# Would fail if extra="forbid" were removed from UserUpdate or the
+# schema started declaring password_hash as a writable field.
+def test_patch_password_hash_directly_returns_422(
+    client: TestClient, make_user
+) -> None:
+    target = make_user(username="bhw_target_2", password="x", role="bhw")
+
+    response = client.patch(
+        f"/api/v1/users/{target.id}",
+        json={"password_hash": "$argon2id$v=19$forged"},  # pragma: allowlist secret
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert any("password_hash" in str(error.get("loc", [])) for error in detail)
+
+
 def test_admin_soft_deletes_user_via_patch(client: TestClient, make_user) -> None:
     target = make_user(username="bhw_target", password="x", role="bhw")
 
