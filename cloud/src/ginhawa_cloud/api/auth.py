@@ -8,12 +8,12 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..core import security
 from ..core.config import get_settings
 from ..core.security import (
     create_access_token,
     get_current_active_user,
     scopes_for_role,
-    verify_password,
 )
 from ..db.models import User
 from ..db.session import get_db
@@ -66,11 +66,17 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> LoginResponse
     ).scalar_one_or_none()
 
     if user is None:
+        # Run verify_password against a constant dummy hash so the wall time
+        # of an unknown-username 401 matches a wrong-password 401. Without
+        # this, argon2 verification only happens on the bad_password branch
+        # and an attacker can probe for valid usernames by timing responses.
+        # The result is discarded; it will always be False.
+        security.verify_password(payload.password, security._DUMMY_HASH)
         raise _credentials_failure(
             db, user_id=None, username=payload.username, reason="unknown_user"
         )
 
-    if not verify_password(payload.password, user.password_hash):
+    if not security.verify_password(payload.password, user.password_hash):
         raise _credentials_failure(
             db,
             user_id=user.id,

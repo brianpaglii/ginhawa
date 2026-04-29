@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from ginhawa_cloud.core import security as security_module
 from ginhawa_cloud.core.security import (
     create_access_token,
     scopes_for_role,
@@ -210,6 +212,56 @@ def test_admin_sees_all_barangays(client_unauthed: TestClient, make_user) -> Non
     response = client_unauthed.get("/api/v1/citizens")
     assert response.status_code == 200
     assert response.json()["total"] == 2
+
+
+def test_login_unknown_user_runs_password_verification(
+    client_unauthed: TestClient, make_user
+) -> None:
+    """The unknown-user branch must invoke verify_password too.
+
+    Without this, an attacker can enumerate valid usernames by timing
+    responses: skipping the argon2 verification on the unknown-user branch
+    makes those 401s observably faster than wrong-password 401s. We assert
+    the call-count invariant rather than wall time so the test is
+    deterministic.
+    """
+    make_user(username="real_user", password="correct-pw", role="bhw")
+    real_verify = security_module.verify_password
+
+    # Known username + correct password (success path).
+    with patch.object(
+        security_module, "verify_password", wraps=real_verify
+    ) as mock_verify:
+        response = client_unauthed.post(
+            "/api/v1/auth/login",
+            json={"username": "real_user", "password": "correct-pw"},
+        )
+        assert response.status_code == 200
+        assert mock_verify.call_count == 1
+
+    # Known username + wrong password (bad_password branch).
+    with patch.object(
+        security_module, "verify_password", wraps=real_verify
+    ) as mock_verify:
+        response = client_unauthed.post(
+            "/api/v1/auth/login",
+            json={"username": "real_user", "password": "wrong-pw"},
+        )
+        assert response.status_code == 401
+        assert mock_verify.call_count == 1
+
+    # Unknown username (the previously-leaky branch).
+    with patch.object(
+        security_module, "verify_password", wraps=real_verify
+    ) as mock_verify:
+        response = client_unauthed.post(
+            "/api/v1/auth/login",
+            json={"username": "ghost", "password": "anything"},
+        )
+        assert response.status_code == 401
+        assert mock_verify.call_count == 1, (
+            "unknown-user branch must run a dummy verify to equalize timing"
+        )
 
 
 def test_logout_writes_audit_log(client: TestClient, db_session) -> None:

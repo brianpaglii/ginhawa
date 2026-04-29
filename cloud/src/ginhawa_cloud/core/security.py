@@ -35,6 +35,21 @@ from .config import get_settings
 
 _pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
+# Dummy argon2id hash used to equalize timing on the unknown-username branch
+# of the login flow (see api/auth.login). When the username is not found, we
+# still run verify_password against this constant so the response time is
+# indistinguishable from a wrong-password attempt against a real account.
+#
+# This is NOT a secret. It is the deterministic output of
+#   argon2.PasswordHasher().hash('x')
+# captured once and hardcoded so every instance of the application uses the
+# same constant. Do not regenerate it: the value is irrelevant as long as it
+# is a syntactically valid argon2id hash that no real password will match.
+_DUMMY_HASH = (
+    "$argon2id$v=19$m=65536,t=3,p=4$1dtcFgk4yetcS3mKCQ0AUQ"
+    "$cT3QGVxFOGwznWs5xipoClwv4GEGOGnmj1XeYD4e214"
+)
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
