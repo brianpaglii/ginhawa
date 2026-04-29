@@ -18,7 +18,15 @@ SessionLocal = sessionmaker(
 )
 
 
-def get_db() -> Generator[Session, None, None]:
+def get_db() -> Generator[Session, None, None]:  # pragma: no cover
+    """Yield a request-scoped DB session bound to the production engine.
+
+    This is the FastAPI dependency injected into route handlers via
+    ``Depends(get_db)``. The test suite substitutes a SQLite-backed session
+    with ``app.dependency_overrides[get_db] = ...`` (see tests/api/conftest.py),
+    so this body is intentionally unreachable in tests — that is the
+    correct dependency-injection pattern, not a coverage gap.
+    """
     db = SessionLocal()
     try:
         yield db
