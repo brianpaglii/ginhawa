@@ -100,6 +100,24 @@ def test_update_changes_only_allowed_fields(client: TestClient) -> None:
     assert body["id"] == citizen_id
 
 
+# Verifies the soft-delete-makes-invisible contract from ADR-0008: once
+# is_active=0, the citizen is indistinguishable from a citizen that
+# never existed at the GET-by-id surface. The 404 message must be
+# identical to the missing-citizen message so callers cannot probe.
+# Would fail if the get_citizen handler dropped its is_active filter
+# and reverted to a plain primary-key lookup.
+def test_soft_deleted_citizen_returns_404_on_get(client: TestClient) -> None:
+    created = client.post("/api/v1/citizens", json=_payload(rfid="DEL-GET-1")).json()
+    citizen_id = created["id"]
+
+    delete_resp = client.delete(f"/api/v1/citizens/{citizen_id}")
+    assert delete_resp.status_code == 204
+
+    response = client.get(f"/api/v1/citizens/{citizen_id}")
+    assert response.status_code == 404
+    assert response.json()["detail"] == f"citizen {citizen_id} not found"
+
+
 def test_soft_delete_removes_from_default_list(client: TestClient) -> None:
     created = client.post("/api/v1/citizens", json=_payload(rfid="DEL-1")).json()
     citizen_id = created["id"]
