@@ -121,6 +121,51 @@ def test_patch_with_allowed_fields_returns_200_and_applies(
     assert body["id"] == citizen_id
 
 
+# Verifies that PATCH /citizens/{id} on an unknown id returns 404 with
+# the project's standard error shape. Would fail if the citizen-None
+# guard at the top of update_citizen were removed (the handler would
+# fall through and call setattr/db.commit on None).
+def test_patch_nonexistent_citizen_returns_404(client: TestClient) -> None:
+    unknown_id = "00000000-0000-0000-0000-000000000000"
+    response = client.patch(
+        f"/api/v1/citizens/{unknown_id}",
+        json={"full_name": "Ghost"},
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == f"citizen {unknown_id} not found"
+
+
+# Verifies that PATCH /citizens/{id} with an empty body returns 200 and
+# the citizen is byte-equivalent to its pre-PATCH GET state — including
+# the same updated_at, which indirectly proves no UPDATE was issued.
+# Would fail if the `if not changes: return citizen` short-circuit were
+# removed (the handler would then bump updated_at and write an audit
+# row, so the body would diverge from the pre-PATCH GET).
+def test_patch_with_empty_body_returns_unchanged_citizen(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/api/v1/citizens", json=_payload(rfid="PATCH-EMPTY-1")
+    ).json()
+    citizen_id = created["id"]
+
+    pre_patch = client.get(f"/api/v1/citizens/{citizen_id}").json()
+
+    response = client.patch(f"/api/v1/citizens/{citizen_id}", json={})
+    assert response.status_code == 200
+    assert response.json() == pre_patch
+
+
+# Verifies that DELETE /citizens/{id} on an unknown id returns 404 with
+# the project's standard error shape. Would fail if the citizen-None
+# guard at the top of soft_delete_citizen were removed.
+def test_delete_nonexistent_citizen_returns_404(client: TestClient) -> None:
+    unknown_id = "00000000-0000-0000-0000-000000000000"
+    response = client.delete(f"/api/v1/citizens/{unknown_id}")
+    assert response.status_code == 404
+    assert response.json()["detail"] == f"citizen {unknown_id} not found"
+
+
 # Verifies the soft-delete-makes-invisible contract from ADR-0008: once
 # is_active=0, the citizen is indistinguishable from a citizen that
 # never existed at the GET-by-id surface. The 404 message must be
