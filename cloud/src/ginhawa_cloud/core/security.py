@@ -72,6 +72,7 @@ _ROLE_SCOPES: dict[str, tuple[str, ...]] = {
         "measurements:read",
         "measurements:write",
         "users:admin",
+        "audit_log:read",
     ),
     "bhw": (
         "citizens:read",

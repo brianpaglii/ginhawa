@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from .audit_log import router as audit_log_router
 from .auth import router as auth_router
 from .citizens import router as citizens_router
 from .health import router as health_router
@@ -14,5 +15,6 @@ api_router.include_router(users_router)
 api_router.include_router(citizens_router)
 api_router.include_router(sessions_router)
 api_router.include_router(measurements_router)
+api_router.include_router(audit_log_router)
 
 __all__ = ["api_router"]
