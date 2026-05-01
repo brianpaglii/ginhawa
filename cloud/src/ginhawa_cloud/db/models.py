@@ -101,6 +101,7 @@ class Session(Base):
     measurement_path: Mapped[str | None] = mapped_column()
     printed_status: Mapped[str] = mapped_column(default="not_requested")
     synced: Mapped[int] = mapped_column(default=0)
+    updated_at: Mapped[str] = mapped_column(default=_utc_now_iso)
 
     citizen: Mapped["Citizen"] = relationship(back_populates="sessions")
     measurements: Mapped[list["Measurement"]] = relationship(
@@ -136,6 +137,7 @@ class Measurement(Base):
     validation_notes: Mapped[str | None] = mapped_column()
     raw_json: Mapped[str | None] = mapped_column()
     synced: Mapped[int] = mapped_column(default=0)
+    updated_at: Mapped[str] = mapped_column(default=_utc_now_iso)
 
     session: Mapped["Session"] = relationship(back_populates="measurements")
 

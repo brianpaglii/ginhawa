@@ -180,6 +180,7 @@ class SessionRead(BaseModel):
     measurement_path: MeasurementPath | None
     printed_status: PrintedStatus
     synced: int
+    updated_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +241,7 @@ class MeasurementRead(BaseModel):
     validation_notes: str | None
     raw_json: str | None
     synced: int
+    updated_at: str
 
 
 # ---------------------------------------------------------------------------
@@ -467,3 +469,65 @@ class BatchSyncRecordResult(BaseModel):
 
 class BatchSyncResponse(BaseModel):
     results: list[BatchSyncRecordResult]
+
+
+# ---------------------------------------------------------------------------
+# Kiosk-to-cloud sync — sessions and measurements batch upload
+# ---------------------------------------------------------------------------
+# Same pattern as CitizenSync: a wholly separate wire shape from the
+# BHW-portal CRUD schemas (SessionCreate / SessionRead etc.) so that
+# CRUD-side changes don't shift the kiosk-cloud contract. extra='forbid'
+# so unrecognised fields fail loud at the request boundary.
+class SessionSync(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    citizen_id: str
+    device_id: str
+    started_at: str
+    ended_at: str | None = None
+    status: SessionStatus
+    error_reason: str | None = None
+    measurement_path: MeasurementPath | None = None
+    printed_status: PrintedStatus
+    synced: int
+    updated_at: str
+
+    @field_validator("started_at", "updated_at")
+    @classmethod
+    def _check_required_iso(cls, v: str) -> str:
+        return _validate_iso_datetime(v)
+
+    @field_validator("ended_at")
+    @classmethod
+    def _check_optional_iso(cls, v: str | None) -> str | None:
+        return _validate_iso_datetime(v) if v is not None else v
+
+
+class MeasurementSync(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    session_id: str
+    type: MeasurementType
+    value: float
+    unit: str
+    source_device: str
+    measured_at: str
+    is_valid: int = 1
+    validation_notes: str | None = None
+    raw_json: str | None = None
+    synced: int
+    updated_at: str
+
+    @field_validator("measured_at", "updated_at")
+    @classmethod
+    def _check_iso_datetime(cls, v: str) -> str:
+        return _validate_iso_datetime(v)
+
+    @field_validator("is_valid")
+    @classmethod
+    def _check_is_valid(cls, v: int) -> int:
+        if v not in (0, 1):
+            raise ValueError("is_valid must be 0 or 1")
+        return v

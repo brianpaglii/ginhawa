@@ -155,7 +155,8 @@ CREATE TABLE sessions (
                             'print_failed'
                         )),
     synced              INTEGER NOT NULL DEFAULT 0
-                        CHECK (synced IN (0, 1))
+                        CHECK (synced IN (0, 1)),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX idx_sessions_citizen ON sessions(citizen_id, started_at);
@@ -220,7 +221,8 @@ CREATE TABLE measurements (
     validation_notes    TEXT,
     raw_json            TEXT,
     synced              INTEGER NOT NULL DEFAULT 0
-                        CHECK (synced IN (0, 1))
+                        CHECK (synced IN (0, 1)),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX idx_meas_session ON measurements(session_id);
