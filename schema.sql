@@ -250,6 +250,9 @@ CREATE INDEX idx_meas_valid ON measurements(is_valid);
 --   'bhw'     - Barangay Health Worker logged into the portal
 --   'system'  - automated system action (sync, retention task, etc.)
 --   'admin'   - administrator with elevated privileges
+--   'kiosk'   - the kiosk itself, acting on behalf of an unattended
+--               (self-service) registration where no BHW is present.
+--               actor_id holds the device_credentials.device_id.
 --
 -- details is a JSON blob with operation-specific metadata: for a 'login'
 -- event, the user agent; for an 'export' event, the filter criteria
@@ -259,7 +262,7 @@ CREATE TABLE audit_log (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp           TEXT NOT NULL DEFAULT (datetime('now')),
     actor_type          TEXT NOT NULL CHECK (actor_type IN (
-                            'citizen', 'bhw', 'system', 'admin'
+                            'citizen', 'bhw', 'system', 'admin', 'kiosk'
                         )),
     actor_id            TEXT,
     action              TEXT NOT NULL,

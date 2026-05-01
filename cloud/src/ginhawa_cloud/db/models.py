@@ -30,7 +30,7 @@ _MEASUREMENT_TYPE_VALUES = (
     "weight",
     "bmi",
 )
-_ACTOR_TYPE_VALUES = ("citizen", "bhw", "system", "admin")
+_ACTOR_TYPE_VALUES = ("citizen", "bhw", "system", "admin", "kiosk")
 _ROLE_VALUES = ("bhw", "admin", "data_viewer")
 
 

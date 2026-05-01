@@ -51,7 +51,7 @@ MeasurementType = Literal[
     "weight",
     "bmi",
 ]
-ActorType = Literal["citizen", "bhw", "system", "admin"]
+ActorType = Literal["citizen", "bhw", "system", "admin", "kiosk"]
 Role = Literal["bhw", "admin", "data_viewer"]
 
 
@@ -400,3 +400,70 @@ class DeviceCredentialUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     revoke: bool
+
+
+# ---------------------------------------------------------------------------
+# Kiosk-to-cloud sync — citizens batch upload (POST /api/v1/sync/citizens)
+# ---------------------------------------------------------------------------
+# CitizenSync is the on-the-wire shape of one record in a kiosk's batch
+# upload. It mirrors CitizenBase but adds the server-managed fields the
+# kiosk has already populated locally (id, registered_at, consent_given_at,
+# updated_at). This is intentionally NOT a subclass of CitizenCreate or
+# CitizenRead — sync is a different contract from the BHW-portal CRUD path,
+# and coupling them would mean every CRUD-side change risks shifting the
+# kiosk-cloud wire format.
+SyncStatus = Literal[
+    "created",
+    "updated",
+    "conflict_stale",
+    "conflict_constraint",
+    "rejected",
+]
+
+
+class CitizenSync(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    rfid_uid: str
+    full_name: str
+    dob: str
+    sex: Sex
+    barangay: str
+    phone: str | None = None
+    consent_version: str
+    consent_given_at: str
+    registered_at: str
+    registered_by: str | None = None
+    is_active: int
+    updated_at: str
+
+    @field_validator("dob")
+    @classmethod
+    def _check_dob(cls, v: str) -> str:
+        v = _validate_iso_date(v)
+        if date.fromisoformat(v) >= date.today():
+            raise ValueError("dob must be in the past")
+        return v
+
+    @field_validator("consent_given_at", "registered_at", "updated_at")
+    @classmethod
+    def _check_iso_datetime(cls, v: str) -> str:
+        return _validate_iso_datetime(v)
+
+    @field_validator("is_active")
+    @classmethod
+    def _check_is_active(cls, v: int) -> int:
+        if v not in (0, 1):
+            raise ValueError("is_active must be 0 or 1")
+        return v
+
+
+class BatchSyncRecordResult(BaseModel):
+    id: str
+    status: SyncStatus
+    error: str | None = None
+
+
+class BatchSyncResponse(BaseModel):
+    results: list[BatchSyncRecordResult]

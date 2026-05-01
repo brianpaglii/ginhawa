@@ -7,6 +7,7 @@ from .device_credentials import router as device_credentials_router
 from .health import router as health_router
 from .measurements import router as measurements_router
 from .sessions import router as sessions_router
+from .sync_citizens import router as sync_citizens_router
 from .users import router as users_router
 
 api_router = APIRouter()
@@ -18,5 +19,6 @@ api_router.include_router(sessions_router)
 api_router.include_router(measurements_router)
 api_router.include_router(audit_log_router)
 api_router.include_router(device_credentials_router)
+api_router.include_router(sync_citizens_router)
 
 __all__ = ["api_router"]
