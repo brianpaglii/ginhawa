@@ -22,13 +22,14 @@ The audit_log table records login successes and failures from
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db.models import User
+from ..db.models import DeviceCredential, User
 from ..db.session import get_db
 from .config import get_settings
 
@@ -189,3 +190,105 @@ def require_scope(scope: str):
         return user
 
     return dependency
+
+
+# ---------------------------------------------------------------------------
+# Kiosk authentication — separate principal type from BHW JWT auth
+# ---------------------------------------------------------------------------
+# Kiosks present a Bearer API key whose argon2id hash lives in
+# device_credentials.api_key_hash. This is a wholly distinct auth path
+# from the user-facing JWT flow (no overlap of dependencies, no shared
+# scope tuples) — kiosks are not users.
+#
+# Authorization: a kiosk principal carries an implicit, fixed scope set
+# scoped to self-service writes (citizens:write_self_service,
+# sessions:write, measurements:write). Scope checking is the
+# responsibility of the sync endpoint handlers; this module only
+# authenticates.
+
+
+def verify_kiosk_credential(api_key: str, db: Session) -> DeviceCredential | None:
+    """Look up the active ``DeviceCredential`` matching ``api_key``.
+
+    The function iterates every active credential and runs
+    :func:`verify_password` against each one, even after a match is
+    found. This is intentional: short-circuiting on first match would
+    let an attacker enumerate the number of active credentials by
+    timing 401 responses against differently-positioned guesses
+    (mirrors the dummy-hash pattern used in :mod:`api.auth.login`).
+    The "constant time" promise here is *constant relative to the
+    population of active credentials*; the function still returns
+    immediately when no active credentials exist.
+
+    Scaling boundary: O(N) over active credentials. Comfortable for
+    dozens of kiosks; for thousands a different lookup mechanism
+    would be needed (e.g., a non-secret key-id prefix stored
+    alongside the hash, indexed for direct lookup).
+
+    TODO(phase4+): replace the linear scan with a key-prefix index
+    once the active-credential count exceeds ~100, or sooner if
+    auth latency on the sync path becomes user-visible.
+    """
+    active = (
+        db.execute(
+            select(DeviceCredential).where(DeviceCredential.revoked_at.is_(None))
+        )
+        .scalars()
+        .all()
+    )
+
+    matched: DeviceCredential | None = None
+    for credential in active:
+        if verify_password(api_key, credential.api_key_hash):
+            # Capture the first match but keep iterating so timing is
+            # determined by the population size, not the match position.
+            if matched is None:
+                matched = credential
+    return matched
+
+
+def _kiosk_credentials_401() -> HTTPException:
+    # Single generic message used for malformed header, missing header,
+    # and no-such-credential. The client cannot tell which case
+    # occurred, just like the BHW login flow's "incorrect credentials".
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="invalid kiosk credential",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+def get_current_kiosk(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+) -> DeviceCredential:
+    """FastAPI dependency that authenticates a kiosk via Bearer API key.
+
+    Note on the parameter shape: the original spec called for
+    ``Header(...)`` (required), but FastAPI converts a missing required
+    header to HTTP 422 (validation error). The contract for this
+    endpoint is to return 401 — indistinguishable from a malformed
+    header — so a missing header is treated as just another bad
+    request. Hence ``Header(default=None, ...)`` plus an explicit
+    ``None`` check below.
+
+    Updates ``last_seen_at`` to now on every successful authentication.
+    """
+    if not authorization:
+        raise _kiosk_credentials_401()
+
+    # RFC 6750 §2.1 specifies the Bearer scheme is case-insensitive.
+    parts = authorization.split(maxsplit=1)
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise _kiosk_credentials_401()
+    api_key = parts[1].strip()
+    if not api_key:
+        raise _kiosk_credentials_401()
+
+    credential = verify_kiosk_credential(api_key, db)
+    if credential is None:
+        raise _kiosk_credentials_401()
+
+    credential.last_seen_at = datetime.now(timezone.utc).isoformat()
+    db.commit()
+    return credential
