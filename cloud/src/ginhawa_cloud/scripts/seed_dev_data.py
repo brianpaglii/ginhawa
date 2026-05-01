@@ -25,23 +25,14 @@ Every seeded row produces an ``audit_log`` entry attributed to
 ``actor_type='system'`` / ``actor_id='seed_script'``, so the database
 has a realistic audit history after seeding.
 
-Deferred
---------
-Device credential seeding is deferred to the Phase 1.5 verification
-milestone (the smoke-test commit). The ``device_credentials`` table
-now exists (added in commit f566915403f9) along with the admin-only
-management endpoints, but the dev credential is intentionally seeded
-as part of the Phase 1.5 final commit so the smoke test can
-demonstrate the full credential lifecycle (create → authenticate →
-revoke) end-to-end against fresh data. The script's stdout makes
-this deferral explicit at end-of-run.
-
 Credentials produced (DEV ONLY — DO NOT USE IN PROD)
 ----------------------------------------------------
 * ``admin`` / ``seed_admin_password_change_me``
 * ``bhw_tibagan`` / ``seed_bhw_password``
 * ``bhw_pinaglabanan`` / ``seed_bhw_password``
 * ``bhw_corazon`` / ``seed_bhw_password``
+* device ``seed_kiosk_001`` /
+  ``seed_kiosk_api_key_DO_NOT_USE_IN_PROD``
 """
 
 from __future__ import annotations
@@ -55,7 +46,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..core.security import hash_password
-from ..db.models import AuditLog, Citizen, Measurement, User
+from ..db.models import AuditLog, Citizen, DeviceCredential, Measurement, User
 from ..db.models import Session as SessionModel
 from ..services.audit import record_audit
 
@@ -70,6 +61,18 @@ _SEED_ACTOR_ID = "seed_script"
 _ADMIN_PASSWORD = "seed_admin_password_change_me"  # pragma: allowlist secret
 _BHW_PASSWORD = "seed_bhw_password"  # pragma: allowlist secret
 
+# CRITICAL — DEV ONLY. The plaintext API key for the seeded device credential
+# is hardcoded so seed runs are reproducible and the smoke test can authenticate
+# without scraping stdout. In production this would be a critical vulnerability:
+# the cloud is supposed to know only the argon2id hash, never the plaintext, and
+# every kiosk's key should be unguessable. This shortcut is acceptable here
+# because the seed script ONLY runs against local dev databases — the API
+# refuses to start without DATABASE_URL and JWT_SECRET set, both of which
+# point at dev infrastructure when this script is invoked.
+_KIOSK_API_KEY_PLAINTEXT = (
+    "seed_kiosk_api_key_DO_NOT_USE_IN_PROD"  # pragma: allowlist secret
+)
+
 
 # ---------------------------------------------------------------------------
 # Hardcoded UUIDs. Idempotency keys: every seed function checks for the row
@@ -82,6 +85,12 @@ _BHW_PASSWORD = "seed_bhw_password"  # pragma: allowlist secret
 #   ...0301..0315  — fifteen measurements
 # ---------------------------------------------------------------------------
 _ADMIN_ID = "00000000-0000-0000-0000-000000000001"
+
+# Hardcoded device_id for the seeded kiosk credential. Lives outside the BHW
+# user range; the bottom-of-band ".0401" leaves room for additional seeded
+# credentials in future without colliding with existing IDs.
+_DEVICE_CREDENTIAL_ID = "00000000-0000-0000-0000-000000000401"
+_DEVICE_CREDENTIAL_DESCRIPTION = "seed_kiosk_001"
 
 _BHW_USERS: list[dict[str, str]] = [
     {
@@ -476,6 +485,7 @@ class SeedReport:
     citizens_created: int
     sessions_created: int
     measurements_created: int
+    device_credentials_created: int
     audit_rows_written: int
 
 
@@ -496,6 +506,7 @@ def seed(db: Session) -> SeedReport:
     citizens_created = _seed_citizens(db)
     sessions_created = _seed_sessions(db)
     measurements_created = _seed_measurements(db)
+    device_credentials_created = _seed_device_credential(db)
 
     db.commit()
 
@@ -505,6 +516,7 @@ def seed(db: Session) -> SeedReport:
         citizens_created=citizens_created,
         sessions_created=sessions_created,
         measurements_created=measurements_created,
+        device_credentials_created=device_credentials_created,
         audit_rows_written=audit_rows_written,
     )
 
@@ -705,6 +717,39 @@ def _seed_measurements(db: Session) -> int:
     return created
 
 
+def _seed_device_credential(db: Session) -> int:
+    """Seed one DeviceCredential with a deterministic plaintext API key.
+
+    The plaintext is hashed via argon2id before storage; the hash is what
+    persists, mirroring the production credential lifecycle. The plaintext
+    constant is reprinted in the stdout summary so the smoke test (and a
+    developer running the seeder by hand) can authenticate.
+    """
+    if db.get(DeviceCredential, _DEVICE_CREDENTIAL_ID) is not None:
+        return 0
+    credential = DeviceCredential(
+        device_id=_DEVICE_CREDENTIAL_ID,
+        api_key_hash=hash_password(_KIOSK_API_KEY_PLAINTEXT),
+        description=_DEVICE_CREDENTIAL_DESCRIPTION,
+        created_at=_utc_now_iso(),
+        created_by=_ADMIN_ID,
+        revoked_at=None,
+        revoked_by=None,
+        last_seen_at=None,
+    )
+    db.add(credential)
+    record_audit(
+        db,
+        action="create_device_credential",
+        actor_type="admin",
+        actor_id=_ADMIN_ID,
+        object_type="device_credential",
+        object_id=credential.device_id,
+        details={"description": credential.description},
+    )
+    return 1
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -719,18 +764,20 @@ def _print_summary(  # pragma: no cover
     print("=== GINHAWA dev-data seeder ===")
     print()
     print("Created in this run:")
-    print(f"  Users:        {report.users_created}")
-    print(f"  Citizens:     {report.citizens_created}")
-    print(f"  Sessions:     {report.sessions_created}")
-    print(f"  Measurements: {report.measurements_created}")
-    print(f"  Audit rows:   {report.audit_rows_written}")
+    print(f"  Users:              {report.users_created}")
+    print(f"  Citizens:           {report.citizens_created}")
+    print(f"  Sessions:           {report.sessions_created}")
+    print(f"  Measurements:       {report.measurements_created}")
+    print(f"  Device credentials: {report.device_credentials_created}")
+    print(f"  Audit rows:         {report.audit_rows_written}")
     print()
     print("Total in database after this run:")
-    print(f"  Users:        {totals['users']}")
-    print(f"  Citizens:     {totals['citizens']}")
-    print(f"  Sessions:     {totals['sessions']}")
-    print(f"  Measurements: {totals['measurements']}")
-    print(f"  Audit rows:   {totals['audit']}")
+    print(f"  Users:              {totals['users']}")
+    print(f"  Citizens:           {totals['citizens']}")
+    print(f"  Sessions:           {totals['sessions']}")
+    print(f"  Measurements:       {totals['measurements']}")
+    print(f"  Device credentials: {totals['device_credentials']}")
+    print(f"  Audit rows:         {totals['audit']}")
     print()
     print("[CREDENTIALS — DEV ONLY, DO NOT USE IN PROD]")
     print(f"  admin            / {_ADMIN_PASSWORD}")
@@ -738,11 +785,10 @@ def _print_summary(  # pragma: no cover
     print(f"  bhw_pinaglabanan / {_BHW_PASSWORD}")
     print(f"  bhw_corazon      / {_BHW_PASSWORD}")
     print()
-    print("[DEFERRED] Device credential not seeded. The device_credentials")
-    print("table now exists, but the dev credential is intentionally seeded")
-    print("as part of the Phase 1.5 final commit so the smoke test can")
-    print("demonstrate the full credential lifecycle (create → authenticate")
-    print("→ revoke) against fresh data.")
+    print("[DEVICE CREDENTIAL — DEV ONLY, DO NOT USE IN PROD]")
+    print(f"  device_id:   {_DEVICE_CREDENTIAL_ID}")
+    print(f"  description: {_DEVICE_CREDENTIAL_DESCRIPTION}")
+    print(f"  api_key:     {_KIOSK_API_KEY_PLAINTEXT}")
 
 
 def main() -> int:  # pragma: no cover
@@ -757,6 +803,9 @@ def main() -> int:  # pragma: no cover
             "citizens": _count(db, Citizen),
             "sessions": _count(db, SessionModel),
             "measurements": _count(db, Measurement),
+            "device_credentials": db.execute(
+                select(func.count(DeviceCredential.device_id))
+            ).scalar_one(),
             "audit": _count(db, AuditLog),
         }
         _print_summary(report, totals)
