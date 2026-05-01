@@ -16,6 +16,23 @@ The full research paper and supporting architectural deliverables live in
 [docs/paper.pdf](docs/paper.pdf). Architecture Decision Records are tracked in
 [docs/decisions/](docs/decisions/).
 
+## Project status
+
+| Phase | Scope                                                                                               | Status      |
+| ----- | --------------------------------------------------------------------------------------------------- | ----------- |
+| 0     | Monorepo scaffolding, schema v1.0.0, host/toolchain plan                                            | complete    |
+| 1     | Cloud backend (BHW/admin API surface, audit log, JWT auth, dev seeder)                              | complete    |
+| 1.5   | Kiosk authentication and `/sync/{citizens,sessions,measurements}` endpoints (ADR-0014 self-service) | complete    |
+| 2     | React/Vite/TypeScript BHW portal (consumes the cloud's OpenAPI spec)                                | next        |
+| 3     | PyQt6 kiosk application on Raspberry Pi 5                                                           | not started |
+| 4     | ESP32 firmware (vitals + anthropometric nodes), end-to-end integration                              | not started |
+
+The Phase 1 wrap-up summarises what shipped, what is locked, and what
+Phase 2 can assume:
+[docs/phase-1-wrapup.md](docs/phase-1-wrapup.md). Empirical evidence
+behind the wrap-up lives under
+[docs/verification/](docs/verification/).
+
 ## Prerequisites
 
 Before setting up a development environment, read
