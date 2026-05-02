@@ -144,7 +144,32 @@ All five suites pass = the laptop is correctly set up.
 Target: a fresh Raspberry Pi 5, Raspberry Pi OS trixie installed,
 network and SSH already configured.
 
-### 1. System packages
+### Choose your starting state
+
+Two supported scenarios — pick one and follow the matching path:
+
+| You logged in as...                             | Path                                                                                                                                         |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| The default `pi` (or another sudo-capable user) | [Path A](#path-a-creating-the-ginhawa-service-user) — create a dedicated `ginhawa` service user, then drop into it for the kiosk install     |
+| `ginhawa` directly (the user already exists)    | [Path B](#path-b-running-as-the-ginhawa-user) — most steps run as the current shell; only system-wide ones (apt, systemd, /etc/) need `sudo` |
+
+Both paths produce the same end state: kiosk source under
+`/opt/ginhawa/src`, encrypted DB at `/var/lib/ginhawa/kiosk.db`,
+credentials at `/etc/ginhawa/kiosk.env`, systemd unit
+`ginhawa-kiosk.service` running as the `ginhawa` user.
+
+If you're not sure which path to take:
+
+```bash
+whoami                    # → 'pi' = Path A; 'ginhawa' = Path B
+id -nG                    # check which groups your user is in
+```
+
+If your `ginhawa` user isn't in the `gpio`, `spi`, and `bluetooth`
+groups, it cannot drive the MFRC522 over SPI or talk BLE — see
+step 2 of either path.
+
+### 1. System packages (both paths)
 
 ```bash
 sudo apt update
@@ -169,39 +194,97 @@ EOF
 sudo systemctl enable --now mosquitto
 ```
 
-### 2. Toolchain
+### Path A: creating the `ginhawa` service user
+
+Take this path if you logged in as `pi` (or any sudo-capable user
+other than `ginhawa`). Skip if your current user is already
+`ginhawa` — go to [Path B](#path-b-running-as-the-ginhawa-user).
+
+#### A.2. Create the user and install uv
 
 ```bash
-# uv (ADR-0003) — installed for the kiosk service user.
 sudo useradd -m -s /bin/bash ginhawa
+sudo usermod -aG gpio,spi,bluetooth,input ginhawa
 sudo -u ginhawa bash -lc 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 ```
 
-### 3. Clone + sync the kiosk package
+#### A.3. Clone + sync the kiosk package
 
 ```bash
 sudo install -d -o ginhawa -g ginhawa /opt/ginhawa
 sudo -u ginhawa git clone <repo> /opt/ginhawa/src
-cd /opt/ginhawa/src/kiosk
-sudo -u ginhawa uv sync
+sudo -u ginhawa bash -lc 'cd /opt/ginhawa/src/kiosk && uv sync'
 ```
 
-This pulls the markered ARM-only deps automatically:
-`mfrc522`, `RPi.GPIO`, `spidev`. The kiosk-side imports for these
-remain lazy (inside `Mfrc522RfidReader.__init__`); see
-[`kiosk/src/ginhawa_kiosk/sensors/rfid.py`](../kiosk/src/ginhawa_kiosk/sensors/rfid.py)
-for the rationale.
-
-### 4. Provision the encrypted local database
+#### A.4. Provision the encrypted local database
 
 ```bash
 sudo install -d -o ginhawa -g ginhawa -m 0700 /var/lib/ginhawa
-sudo -u ginhawa bash -c '
+sudo -u ginhawa bash -lc '
   cd /opt/ginhawa/src/kiosk
   KIOSK_DB_PATH=/var/lib/ginhawa/kiosk.db \
   uv run python -m ginhawa_kiosk.scripts.provision_db
 '
 ```
+
+Then continue with [step 5: pair the Omron BP cuff](#5-pair-and-capture-the-omron-bp-cuff)
+(common to both paths).
+
+### Path B: running as the `ginhawa` user
+
+Take this path if `whoami` already prints `ginhawa`. The user
+exists; `sudo -u ginhawa` is redundant and only adds password
+prompts.
+
+Quick sanity check first:
+
+```bash
+groups                    # must include: gpio spi bluetooth input
+```
+
+If any of those groups are missing, add them and re-login (group
+membership is only picked up on a fresh shell):
+
+```bash
+sudo usermod -aG gpio,spi,bluetooth,input "$USER"
+exit                      # log out
+# log back in
+groups                    # confirm
+```
+
+#### B.2. Install uv
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# uv installs to ~/.local/bin; exec a new shell or source the rc
+# file to pick it up:
+source ~/.bashrc          # or ~/.profile, depending on your shell
+uv --version
+```
+
+#### B.3. Clone + sync the kiosk package
+
+`/opt/ginhawa` is a system path so `sudo` is needed for the
+top-level mkdir; once it's owned by you, the rest runs as your
+current shell.
+
+```bash
+sudo install -d -o "$USER" -g "$USER" /opt/ginhawa
+git clone <repo> /opt/ginhawa/src
+cd /opt/ginhawa/src/kiosk
+uv sync
+```
+
+#### B.4. Provision the encrypted local database
+
+```bash
+sudo install -d -o "$USER" -g "$USER" -m 0700 /var/lib/ginhawa
+cd /opt/ginhawa/src/kiosk
+KIOSK_DB_PATH=/var/lib/ginhawa/kiosk.db \
+  uv run python -m ginhawa_kiosk.scripts.provision_db
+```
+
+### After step 4 (both paths)
 
 This:
 
@@ -225,33 +308,41 @@ sudo bluetoothctl
 [bluetooth]# quit
 ```
 
-Record the cuff's MAC and store it in `device_config`:
+Record the cuff's MAC and store it in `device_config`. The
+`run_as_ginhawa` helper below wraps the two paths' shells: on
+Path A use `sudo -u ginhawa bash -lc '...'`; on Path B drop the
+prefix and just run the body. Both produce the same effect.
 
 ```bash
-sudo -u ginhawa bash -c '
-  cd /opt/ginhawa/src/kiosk
-  KIOSK_DB_PATH=/var/lib/ginhawa/kiosk.db \
-  KIOSK_DB_KEY=<the-key-from-step-4> \
+# Path B (logged in as ginhawa):
+cd /opt/ginhawa/src/kiosk
+KIOSK_DB_PATH=/var/lib/ginhawa/kiosk.db \
+KIOSK_DB_KEY=<the-key-from-step-4> \
   uv run python -c "
 from ginhawa_kiosk.db.models import DeviceConfig
 from ginhawa_kiosk.db.session import create_engine_for_kiosk, make_session_factory
 from datetime import datetime, timezone
-import os
+import os, pathlib
 factory = make_session_factory(
     create_engine_for_kiosk(
-        __import__(\"pathlib\").Path(os.environ[\"KIOSK_DB_PATH\"]),
-        os.environ[\"KIOSK_DB_KEY\"],
+        pathlib.Path(os.environ['KIOSK_DB_PATH']),
+        os.environ['KIOSK_DB_KEY'],
     )
 )
 with factory() as s:
     s.add(DeviceConfig(
-        key=\"omron_cuff_mac\",
-        value=\"AA:BB:CC:DD:EE:FF\",
+        key='omron_cuff_mac',
+        value='AA:BB:CC:DD:EE:FF',
         updated_at=datetime.now(timezone.utc).isoformat(),
     ))
     s.commit()
 "
-'
+
+# Path A (logged in as pi or another sudoer): wrap the same body —
+#   sudo -u ginhawa bash -lc '
+#     cd /opt/ginhawa/src/kiosk && \
+#     KIOSK_DB_PATH=… KIOSK_DB_KEY=… uv run python -c "…"
+#   '
 ```
 
 **Per CLAUDE.md "Hardware safety": never write to the Omron EEPROM.**
@@ -274,33 +365,32 @@ a one-time runbook step:
    — it has moved between releases.
 4. Pair the scale to the Pi over BLE (`bluetoothctl scan on`, find
    the device, `pair`, `trust`).
-5. Store the bindkey:
+5. Store the bindkey (Path B form below — wrap with
+   `sudo -u ginhawa bash -lc '...'` on Path A):
 
 ```bash
-sudo -u ginhawa bash -c '
-  cd /opt/ginhawa/src/kiosk
-  KIOSK_DB_PATH=/var/lib/ginhawa/kiosk.db \
-  KIOSK_DB_KEY=<the-key-from-step-4> \
+cd /opt/ginhawa/src/kiosk
+KIOSK_DB_PATH=/var/lib/ginhawa/kiosk.db \
+KIOSK_DB_KEY=<the-key-from-step-4> \
   uv run python -c "
 from ginhawa_kiosk.db.models import DeviceConfig
 from ginhawa_kiosk.db.session import create_engine_for_kiosk, make_session_factory
 from datetime import datetime, timezone
-import os
+import os, pathlib
 factory = make_session_factory(
     create_engine_for_kiosk(
-        __import__(\"pathlib\").Path(os.environ[\"KIOSK_DB_PATH\"]),
-        os.environ[\"KIOSK_DB_KEY\"],
+        pathlib.Path(os.environ['KIOSK_DB_PATH']),
+        os.environ['KIOSK_DB_KEY'],
     )
 )
 with factory() as s:
     s.add(DeviceConfig(
-        key=\"xiaomi_scale_bindkey\",
-        value=\"0123456789abcdef0123456789abcdef\",  # the 32-char hex bindkey
+        key='xiaomi_scale_bindkey',
+        value='<paste-32-char-hex-bindkey-here>',  # pragma: allowlist secret
         updated_at=datetime.now(timezone.utc).isoformat(),
     ))
     s.commit()
 "
-'
 ```
 
 The bindkey inherits SQLCipher at-rest encryption from ADR-0001.
@@ -370,7 +460,8 @@ journalctl -u ginhawa-kiosk -f --since "5 min ago"
 
 # Confirm SQLCipher engagement (file exists, is encrypted):
 file /var/lib/ginhawa/kiosk.db          # → "data" (not "SQLite database")
-sudo -u ginhawa sqlcipher /var/lib/ginhawa/kiosk.db <<'SQL'
+# As the ginhawa user (drop the sudo prefix on Path B):
+sqlcipher /var/lib/ginhawa/kiosk.db <<'SQL'
 PRAGMA key = '<the-key-from-step-4>';
 SELECT name FROM sqlite_master WHERE type='table';
 SQL
@@ -495,14 +586,14 @@ taxonomy: `ginhawa/kiosk/<device_id>/sensors/{spo2,heart_rate,temperature,height
 
 ## Troubleshooting
 
-| Symptom                                        | Likely cause                                        | Fix                                                                                                     |
-| ---------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `import RPi.GPIO` fails on Pi                  | running as the wrong user (no GPIO access)          | systemd unit must run as `ginhawa`, which is in the `gpio` group                                        |
-| `bleak` / scan returns nothing                 | Bluetooth disabled or BlueZ not running             | `sudo systemctl enable --now bluetooth`                                                                 |
-| Kiosk sync gets `401 invalid kiosk credential` | `KIOSK_API_KEY` mismatched against the cloud's hash | revoke the old credential cloud-side, issue new, update `/etc/ginhawa/kiosk.env`, restart the unit      |
-| SQLCipher reports "file is not a database"     | wrong key, OR the `PRAGMA key` was never issued     | both fail the same way — verify `KIOSK_DB_KEY` first; if that's correct, see ADR-0001 ("Consequences"). |
-| Printer goes dark mid-print + Pi reboots       | printer being drawn from Pi's 5 V rail              | wire the printer to its 9 V adapter (CLAUDE.md "Hardware safety")                                       |
-| Two BLE adapters disagree on device state      | concurrent BLE access                               | the FSM serialises these; if you see this, code regression is the cause — file a bug                    |
+| Symptom                                        | Likely cause                                        | Fix                                                                                                                                |
+| ---------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `import RPi.GPIO` fails on Pi                  | user not in the `gpio` group                        | `sudo usermod -aG gpio,spi,bluetooth,input "$USER"`, then log out and log back in (group membership only refreshes on a new shell) |
+| `bleak` / scan returns nothing                 | Bluetooth disabled or BlueZ not running             | `sudo systemctl enable --now bluetooth`                                                                                            |
+| Kiosk sync gets `401 invalid kiosk credential` | `KIOSK_API_KEY` mismatched against the cloud's hash | revoke the old credential cloud-side, issue new, update `/etc/ginhawa/kiosk.env`, restart the unit                                 |
+| SQLCipher reports "file is not a database"     | wrong key, OR the `PRAGMA key` was never issued     | both fail the same way — verify `KIOSK_DB_KEY` first; if that's correct, see ADR-0001 ("Consequences").                            |
+| Printer goes dark mid-print + Pi reboots       | printer being drawn from Pi's 5 V rail              | wire the printer to its 9 V adapter (CLAUDE.md "Hardware safety")                                                                  |
+| Two BLE adapters disagree on device state      | concurrent BLE access                               | the FSM serialises these; if you see this, code regression is the cause — file a bug                                               |
 
 ---
 
