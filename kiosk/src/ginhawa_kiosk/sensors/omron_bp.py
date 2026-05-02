@@ -25,6 +25,21 @@ Protocol summary (Bluetooth SIG Blood Pressure Measurement, 0x2A35):
 CRITICAL: per CLAUDE.md "Hardware safety", we never write to the
 HEM-7155T EEPROM. This implementation only subscribes to
 notifications — it issues no write commands.
+
+ARCHITECTURAL NOTE (2026-05-02 bench finding): The HEM-7155T uses a
+store-and-forward BLE model. Measurements happen on the cuff alone
+(user presses START on cuff, no Pi connection needed). The cuff
+stores the most recent measurement internally. When the user later
+puts the cuff in pairing mode and the kiosk connects, the cuff
+delivers the stored measurement via the SIG indicate mechanism.
+Pairing mode and measurement mode are mutually exclusive on the
+device — pressing START while in pairing mode exits pairing.
+
+The kiosk's GUI flow (Phase 2 Prompt 8) must reflect this:
+1. Prompt user to take BP on the cuff alone
+2. Wait for user to indicate "done"
+3. Prompt user to put cuff in pairing mode
+4. Connect and retrieve stored measurement
 """
 
 from __future__ import annotations
@@ -265,27 +280,29 @@ class OmronBpSensor(Sensor):
             return
         await self._publish_reading(reading)
 
-    async def _read_one_notification(  # pragma: no cover - hardware path
-        self, mac: str
-    ) -> bytes:
-        """Connect, subscribe, await one notification, return payload."""
+    async def _read_one_notification(self, mac: str) -> bytes:
+        """Connect, subscribe, await one notification, return payload.
+
+        Two construction paths:
+
+        * Test path (``self._client_factory`` is set): the factory
+          returns an async context manager; we use ``async with`` to
+          enter and leave it. Mocked factories produce real context
+          managers in unit tests, so this is the simpler shape.
+
+        * Real path (``bleak`` + ``bleak-retry-connector``): we resolve
+          the MAC to a ``BLEDevice`` via
+          ``BleakScanner.find_device_by_address`` (timeout 20 s — the
+          user needs that long to put the cuff into pairing mode after
+          the kiosk publishes ``BpMeasurementRequested``), then call
+          ``establish_connection`` which returns an *already-connected*
+          client (NOT a context manager). We use explicit
+          ``try``/``finally`` with ``await client.disconnect()`` so we
+          never call ``__aenter__`` on an already-connected client (which
+          would raise "Client is already connected" — a real-hardware
+          bug we hit on the bench in 2026-05-02 testing).
+        """
         import asyncio
-
-        if self._client_factory is not None:
-            client_cm = self._client_factory(mac)
-        else:
-            from bleak_retry_connector import establish_connection
-            from bleak import BleakClient
-
-            # bleak-retry-connector accepts a BLEDevice or its address;
-            # we pass the address (str) and let the connector resolve.
-            # The signature stub disagrees, hence the type ignore on
-            # the offending arg.
-            client_cm = await establish_connection(
-                BleakClient,
-                mac,  # type: ignore[arg-type]
-                mac,
-            )
 
         received: asyncio.Future[bytes] = asyncio.get_event_loop().create_future()
 
@@ -293,10 +310,30 @@ class OmronBpSensor(Sensor):
             if not received.done():
                 received.set_result(bytes(data))
 
-        async with client_cm as client:
+        if self._client_factory is not None:
+            client_cm = self._client_factory(mac)
+            async with client_cm as client:
+                await client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
+                payload = await asyncio.wait_for(received, timeout=120.0)
+                await client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
+            return payload
+
+        from bleak import BleakClient, BleakScanner
+        from bleak_retry_connector import establish_connection
+
+        device = await BleakScanner.find_device_by_address(mac, timeout=20.0)
+        if device is None:
+            raise RuntimeError(
+                f"Omron HEM-7155T at {mac} not advertising — put the "
+                "cuff into pairing mode and try again"
+            )
+        client = await establish_connection(BleakClient, device, mac)
+        try:
             await client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
             payload = await asyncio.wait_for(received, timeout=120.0)
             await client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
+        finally:
+            await client.disconnect()
         return payload
 
     async def _publish_reading(self, reading: BpReading) -> None:
