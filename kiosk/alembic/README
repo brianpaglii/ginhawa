@@ -1,0 +1,19 @@
+Kiosk-side Alembic migration tree.
+
+The kiosk's local database is SQLite under SQLCipher; migrations are
+applied via the env.py here, which builds an engine through
+``ginhawa_kiosk.db.session.create_engine_for_kiosk`` so the SQLCipher
+PRAGMA key is set on every connection.
+
+Schema discipline:
+* The schema source of truth is ``/schema.sql`` at the repo root.
+* Every migration here has a counterpart in ``cloud/alembic/`` —
+  except migrations that touch tables the kiosk does not have
+  (``users``, ``device_credentials``).
+* Type substitutions vs the cloud: TEXT → String, REAL → Float,
+  INTEGER → Integer.
+
+Usage:
+    cd kiosk
+    KIOSK_DB_PATH=/path/to/db KIOSK_DB_KEY=... \
+        uv run alembic upgrade head
