@@ -41,7 +41,7 @@ from transitions import Machine
 
 from ..db.models import Citizen
 from ..db.models import Session as SessionModel
-from ..services.audit import record_audit
+from ..services.audit import ActorType, record_audit
 
 
 _PathChoice = Literal["vitals", "anthropometric", "full"]
@@ -418,7 +418,7 @@ class SessionFSM:
         if self.current_session is not None:
             self.current_session.status = "aborted"
             self.current_session.updated_at = _utc_now_iso()
-        actor_type = "system" if self._was_timeout() else "citizen"
+        actor_type: ActorType = "system" if self._was_timeout() else "citizen"
         self._record_audit(
             action="fsm.aborted",
             actor_type=actor_type,
@@ -631,7 +631,7 @@ class SessionFSM:
         self,
         *,
         action: str,
-        actor_type: str,
+        actor_type: ActorType,
         actor_id: str | None,
         details: dict[str, Any],
     ) -> None:

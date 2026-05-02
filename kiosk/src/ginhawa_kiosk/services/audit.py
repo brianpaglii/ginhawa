@@ -8,10 +8,40 @@ print event, sync confirmation) flows through here.
 
 The local ``audit_log`` is append-only by convention on the kiosk —
 unlike the cloud, SQLite under SQLCipher does not maintain Postgres-
-style triggers / role permissions. Defence-in-depth on the kiosk is:
-this is the only writer, the table has no UPDATE/DELETE handlers in
-this module, and the disk file is itself encrypted (so direct
-tampering requires the key).
+style triggers / role permissions (ADR-0011). Defence-in-depth on
+the kiosk is: this is the only writer, the table has no UPDATE/DELETE
+handlers in this module, and the disk file is itself encrypted (so
+direct tampering requires the key).
+
+CLOUD vs KIOSK SIGNATURE ASYMMETRY
+----------------------------------
+The cloud's ``record_audit`` accepts a FastAPI ``Request`` and
+extracts ``client.host`` for ``ip_address``. The kiosk's does NOT —
+the kiosk runs no HTTP server, so there is no Request object to
+extract from. Callers that have an IP at hand pass it via
+``ip_address``; callers that don't, leave it unset. We deliberately
+do not duck-type a request-shaped parameter on the kiosk side
+because every kiosk-internal call would pass ``None`` and the
+parameter would be dead weight.
+
+KIOSK AUDIT vs CLOUD AUDIT (see ADR-0016)
+-----------------------------------------
+The kiosk's local ``audit_log`` is forensic-only. Rows here are NOT
+uploaded to the cloud as a separate stream. The cloud's canonical
+audit trail is rebuilt from the sync endpoints' attribution: each
+``POST /api/v1/sync/{citizens,sessions,measurements}`` writes one
+``audit_log`` row on the cloud side with ``actor_type='kiosk'`` and
+``actor_id=<device_credentials.device_id>``.
+
+Consequence: if a compromised kiosk tampers with its local
+``audit_log`` between writing and syncing the underlying data, the
+local forensic record can disappear, but the cloud's audit row
+(written by the cloud at sync time) survives. A divergence between
+local kiosk audit count and cloud kiosk audit count is itself a
+useful forensic signal.
+
+This decision is revisited in Phase 3 once the threat model fully
+covers offline kiosk compromise.
 """
 
 from __future__ import annotations
@@ -19,19 +49,27 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.orm import Session
 
 from ..db.models import AuditLog
 
 
+# Tighter than the schema CHECK constraint: the audit_log table allows
+# 'admin' too, but the kiosk has no admin principal — the BHW portal is
+# cloud-only. Excluding 'admin' here catches a bug at type-check time
+# instead of letting an unreachable value slip through to a CHECK fail
+# at runtime.
+ActorType = Literal["citizen", "bhw", "system", "kiosk"]
+
+
 def record_audit(
     db: Session,
     *,
+    actor_type: ActorType,
+    actor_id: str | None,
     action: str,
-    actor_type: str,
-    actor_id: str | None = None,
     object_type: str | None = None,
     object_id: str | None = None,
     ip_address: str | None = None,
