@@ -42,6 +42,19 @@ useful forensic signal.
 
 This decision is revisited in Phase 3 once the threat model fully
 covers offline kiosk compromise.
+
+# Convention: each layer audits its own actions.
+#
+#   - FSM (fsm/session_fsm.py) audits state transitions only.
+#   - Lookup services audit reads (citizen.read on RFID lookup, etc).
+#   - Sensor adapters (sensors/) audit captures.
+#   - Sync daemon (sync/daemon.py) audits sync attempts.
+#
+# No layer audits another layer's actions on its behalf. If the FSM
+# caused a citizen lookup, the lookup service still emits the read
+# audit — not the FSM. This keeps actor_type accurate and prevents
+# double-audited actions during refactors.
+
 """
 
 from __future__ import annotations
