@@ -331,6 +331,48 @@ docker compose down               # stop (data persists in volume)
 - The printer is best-effort: a print failure does not affect the
   session record. The session is saved regardless.
 
+## Kiosk-specific rules
+
+These augment the absolute rules in "Never do these" with kiosk-side
+implementation details that recur across modules.
+
+- **SQLCipher requires `PRAGMA key = '<key>'` immediately on every
+  new connection.** This is the FIRST statement on the connection,
+  before any other SQL — otherwise SQLCipher reports "file is not a
+  database". The data-access layer (`db/session.py`) hooks
+  SQLAlchemy's `connect` event and is the only sanctioned caller of
+  `core.security.apply_sqlcipher_pragma`. Do not open raw connections
+  elsewhere.
+- **SQLAlchemy models in `kiosk/src/ginhawa_kiosk/db/models.py` track
+  `/schema.sql` and never diverge from it.** Schema changes require
+  matching Alembic migrations in BOTH `kiosk/alembic/` and
+  `cloud/alembic/`, plus an update to `/schema.sql`. The kiosk omits
+  `users` and `device_credentials` (cloud-only); everything else
+  mirrors the cloud structure with TEXT/REAL → String/Float
+  substitutions.
+- **The kiosk is the SOLE writer to its local `audit_log`,** via
+  `services.audit.record_audit`. This mirrors the cloud's pattern
+  (ADR-0005). Defence-in-depth on the kiosk: the disk file is
+  encrypted, this module is the only writer, and there are no
+  UPDATE/DELETE handlers exposed for `audit_log`.
+- **BLE operations are never run concurrently.** BlueZ on the Pi is
+  not concurrent-safe for our use. The session FSM is the SOLE
+  serialiser of BLE access — it holds a lock and owns each BLE
+  device's lifecycle (BP measurement → release → weight scan →
+  release → ...). If you see code that opens two BLE connections
+  simultaneously, that is a bug.
+- **MQTT subscriptions handle reconnect-and-resubscribe automatically.**
+  Mosquitto on `localhost` may bounce (e.g., during an OS update); the
+  paho-mqtt client is configured with `reconnect_delay_set` and the
+  on-connect callback re-subscribes to every topic. Application code
+  treats subscriptions as durable, not one-shot.
+- **`MOCK_HARDWARE` is the SINGLE switch between dev and prod.**
+  Subpackages must consult `Settings.MOCK_HARDWARE` through
+  `core.config.get_settings()` — never sniff env vars directly,
+  never branch on `platform.machine()`, never inspect `/sys`. One
+  switch, one truth, one place. The factory in `sensors/factory.py`
+  is the only place this flag is read.
+
 ## Things I'll often ask Claude Code to do
 
 - Add a new endpoint with tests (cloud)

@@ -33,3 +33,22 @@ repos:
     hooks:
       - id: detect-secrets
         args: ["--baseline", ".secrets.baseline"]
+
+  # Kiosk-only local hooks. These run only when files under kiosk/
+  # change so cloud-only commits don't pay the cost.
+  - repo: local
+    hooks:
+      - id: kiosk-mypy
+        name: kiosk mypy --strict
+        language: system
+        entry: bash -c 'cd kiosk && uv run mypy src/ginhawa_kiosk'
+        types: [python]
+        files: ^kiosk/src/
+        pass_filenames: false
+      - id: kiosk-pytest-smoke
+        name: kiosk pytest (smoke)
+        language: system
+        entry: bash -c 'cd kiosk && uv run pytest -q tests/test_smoke.py'
+        types: [python]
+        files: ^kiosk/(src|tests)/
+        pass_filenames: false
