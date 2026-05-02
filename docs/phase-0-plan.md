@@ -144,6 +144,12 @@ All five suites pass = the laptop is correctly set up.
 Target: a fresh Raspberry Pi 5, Raspberry Pi OS trixie installed,
 network and SSH already configured.
 
+
+RFID Setup
+  - sudo apt install libsqlcipher-dev python3-lgpio
+  - sudo raspi-config → Interface Options → SPI → Enable, then reboot
+  - sudo rfkill unblock bluetooth (one time, persists across reboots
+
 ### Choose your starting state
 
 Two supported scenarios — pick one and follow the matching path:
