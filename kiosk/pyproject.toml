@@ -28,7 +28,7 @@ dependencies = [
     # fails to build off-Pi). On the Pi (aarch64), uv sync pulls them
     # in automatically.
     "mfrc522>=0.0.7 ; platform_machine == 'aarch64' or platform_machine == 'armv7l'",
-    "RPi.GPIO ; platform_machine == 'aarch64' or platform_machine == 'armv7l'",
+    "rpi-lgpio ; platform_machine == 'aarch64' or platform_machine == 'armv7l'",
     "spidev ; platform_machine == 'aarch64' or platform_machine == 'armv7l'",
 ]
 
