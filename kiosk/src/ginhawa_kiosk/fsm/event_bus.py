@@ -1,0 +1,153 @@
+"""Async pub/sub event bus.
+
+Sensors and the GUI publish typed events to the bus; the FSM (and
+anything else interested) subscribes by event type. The bus
+decouples the FSM from sensor implementations — the FSM does not
+know whether an :class:`RfidScanned` event came from the MFRC522
+adapter, the mock adapter, or a test fixture.
+
+Semantics:
+
+* No reordering. No priorities. Events are dispatched to subscribers
+  in arrival order (Python asyncio task queue ordering).
+* Handlers are async functions. Synchronous handlers are not
+  supported — wrap them in an async shim if you need that.
+* If a handler raises, the bus logs the failure but does NOT cancel
+  other handlers for the same event. One sensor's parse error must
+  not knock the audit-writing handler off the bus.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
+
+from pydantic import BaseModel
+
+
+class Event(BaseModel):
+    """Base class for all bus-routed events. Subclass it to define a
+    new event type with typed fields."""
+
+
+_E = TypeVar("_E", bound=Event)
+Handler = Callable[[Any], Awaitable[None]]
+
+
+# ---------------------------------------------------------------------------
+# Event types
+# ---------------------------------------------------------------------------
+
+
+class RfidScanned(Event):
+    uid: str
+
+
+class CitizenIdentified(Event):
+    """Fired by the citizen-lookup service after an RFID scan.
+
+    ``citizen_id`` is None when the RFID UID does not resolve to a
+    known citizen — the FSM uses that to decide between the
+    REGISTERING and MENU/CONSENT_VERIFICATION paths.
+    """
+
+    citizen_id: str | None
+
+
+class ConsentGiven(Event):
+    pass
+
+
+class ConsentRefused(Event):
+    pass
+
+
+class PathSelected(Event):
+    path: str  # 'vitals' | 'anthropometric' | 'full'
+
+
+class MeasurementCaptured(Event):
+    measurement_id: str
+
+
+class MeasurementPathComplete(Event):
+    pass
+
+
+class PrintRequested(Event):
+    pass
+
+
+class PrintComplete(Event):
+    success: bool
+    printed_status: str
+
+
+class FinishWithoutPrinting(Event):
+    pass
+
+
+class PaperOutDetected(Event):
+    pass
+
+
+class ErrorOccurred(Event):
+    reason: str
+
+
+class TimeoutFired(Event):
+    pass
+
+
+class Acknowledge(Event):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Bus
+# ---------------------------------------------------------------------------
+
+
+class EventBus:
+    """In-process async pub/sub. One instance per kiosk runtime."""
+
+    def __init__(self, *, logger: Any | None = None) -> None:
+        self._subs: dict[type[Event], list[Handler]] = defaultdict(list)
+        self._logger = logger or _default_logger()
+
+    def subscribe(
+        self, event_type: type[_E], handler: Callable[[_E], Awaitable[None]]
+    ) -> None:
+        """Register a handler for events of ``event_type``. Multiple handlers
+        per type are allowed; they are invoked in registration order."""
+        self._subs[event_type].append(handler)
+
+    async def publish(self, event: Event) -> None:
+        """Dispatch ``event`` to all handlers subscribed to its type.
+
+        A handler that raises is logged and skipped — the bus does
+        NOT propagate the exception. The remaining handlers still
+        run. This is the offline-resilient pattern: one bad
+        subscriber must not take the whole kiosk down.
+        """
+        for handler in list(self._subs[type(event)]):
+            try:
+                await handler(event)
+            except Exception as exc:
+                # Pass the event class name under "event_type" rather
+                # than "event" because structlog uses the first
+                # positional as the event-name kwarg internally; a
+                # collision raises TypeError on common logger stubs.
+                self._logger.error(
+                    "event_bus.handler_failed",
+                    event_type=type(event).__name__,
+                    handler=getattr(handler, "__qualname__", repr(handler)),
+                    error=str(exc),
+                )
+
+
+def _default_logger() -> Any:  # pragma: no cover - lazy structlog init
+    import structlog
+
+    return structlog.get_logger("event_bus")

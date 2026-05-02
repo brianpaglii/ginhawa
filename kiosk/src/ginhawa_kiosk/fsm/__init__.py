@@ -1,13 +1,53 @@
 """Session state machine and event bus.
 
-The kiosk session FSM (per Figure 3.7 of the paper) is implemented
-with the ``transitions`` library: states like IDLE → RFID_SCAN →
-CONSENT → MEASURE_VITALS → MEASURE_ANTHRO → REVIEW → PRINT → IDLE,
-with explicit error / abort transitions. The event bus is a thin
-synchronous publish/subscribe surface that GUI screens, sensor
-adapters, and the audit-writing service all bind to.
+Per ADR / paper Figure 3.8: the kiosk session FSM models IDLE → RFID
+scan → identify or register → consent → menu → measurements → report
+→ end, plus the explicit error/abort branches.
 
-The FSM is the SOLE serialiser of BLE operations. CLAUDE.md's "no
-two BLE connections at once" rule is enforced here, not at the BLE
-adapter level — the FSM holds the lock and owns the lifecycle.
+Implementation uses the ``transitions`` library for the state graph
+and a small async pub/sub bus for routing typed events from sensors
+and the GUI to the FSM. The FSM is the SOLE serialiser of BLE
+operations (CLAUDE.md, "no concurrent BLE"); it holds the lock and
+owns each device's lifecycle.
 """
+
+from .event_bus import (
+    Acknowledge,
+    CitizenIdentified,
+    ConsentGiven,
+    ConsentRefused,
+    ErrorOccurred,
+    Event,
+    EventBus,
+    FinishWithoutPrinting,
+    MeasurementCaptured,
+    MeasurementPathComplete,
+    PaperOutDetected,
+    PathSelected,
+    PrintComplete,
+    PrintRequested,
+    RfidScanned,
+    TimeoutFired,
+)
+from .session_fsm import SessionFSM, State
+
+__all__ = [
+    "Acknowledge",
+    "CitizenIdentified",
+    "ConsentGiven",
+    "ConsentRefused",
+    "ErrorOccurred",
+    "Event",
+    "EventBus",
+    "FinishWithoutPrinting",
+    "MeasurementCaptured",
+    "MeasurementPathComplete",
+    "PaperOutDetected",
+    "PathSelected",
+    "PrintComplete",
+    "PrintRequested",
+    "RfidScanned",
+    "SessionFSM",
+    "State",
+    "TimeoutFired",
+]
