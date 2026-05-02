@@ -15,6 +15,12 @@ Semantics:
 * If a handler raises, the bus logs the failure but does NOT cancel
   other handlers for the same event. One sensor's parse error must
   not knock the audit-writing handler off the bus.
+
+# BpMeasurementRequested is published by the FSM when it transitions
+# into the BP-measurement sub-state of MEASURING_VITALS. The wiring
+# from FSM → this event lands in the GUI/sensor-coordinator prompt
+# (Phase 2 Prompt 8). Until then, BP measurement can be triggered
+# in tests by publishing this event directly.
 """
 
 from __future__ import annotations
@@ -124,6 +130,13 @@ class TimeoutFired(Event):
 
 class Acknowledge(Event):
     pass
+
+
+class BpMeasurementRequested(Event):
+    """Fired by the FSM when entering MEASURING_VITALS to ask the
+    Omron BP cuff sensor to take a reading. The sensor connects,
+    awaits one notification, parses, publishes MeasurementProposed
+    events for systolic / diastolic / pulse, then disconnects."""
 
 
 # ---------------------------------------------------------------------------

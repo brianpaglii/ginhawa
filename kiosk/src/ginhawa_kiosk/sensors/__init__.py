@@ -1,27 +1,92 @@
 """Sensor adapter registry.
 
-Each sensor type defines an abstract base class plus a mock
-implementation here; the production implementation lives in a sibling
-module and is imported only when ``Settings.MOCK_HARDWARE is False``.
-A factory chooses between them at construction time.
+Four sensor types, each with a mock and a real implementation:
+
+* RFID reader (MFRC522 over SPI on the Pi)
+* Xiaomi Smart Scale S200 (BLE, via xiaomi-ble — see ADR-0017)
+* Omron HEM-7155T BP cuff (BLE Blood Pressure Service 0x1810)
+* MQTT subscriber for ESP32-A (SpO2, heart rate) and ESP32-B
+  (temperature, height)
+
+The factory in this module picks mock or real per sensor based on
+``Settings.MOCK_HARDWARE``. Per CLAUDE.md, that flag is the SINGLE
+switch between dev and prod and is read here and only here.
 """
 
-from .base import (
-    BaseAnthropometricSensor,
-    BaseBloodPressureSensor,
-    BasePulseOximeter,
-    BaseRfidReader,
-    BaseScale,
-    BaseThermalCamera,
-)
-from .factory import build_sensor_set
+from __future__ import annotations
+
+from sqlalchemy.orm import Session
+
+from ..core.config import Settings
+from ..fsm.event_bus import EventBus
+from .base import Sensor, SensorUnavailable
+from .mqtt_sensors import MockMqttSensors, MqttSensorSubscriber
+from .omron_bp import MockOmronBp, OmronBpSensor
+from .rfid import Mfrc522RfidReader, MockRfidReader
+from .xiaomi_scale import MockXiaomiScale, XiaomiScaleSensor
+
 
 __all__ = [
-    "BaseAnthropometricSensor",
-    "BaseBloodPressureSensor",
-    "BasePulseOximeter",
-    "BaseRfidReader",
-    "BaseScale",
-    "BaseThermalCamera",
-    "build_sensor_set",
+    "Mfrc522RfidReader",
+    "MockMqttSensors",
+    "MockOmronBp",
+    "MockRfidReader",
+    "MockXiaomiScale",
+    "MqttSensorSubscriber",
+    "OmronBpSensor",
+    "Sensor",
+    "SensorUnavailable",
+    "XiaomiScaleSensor",
+    "create_all_sensors",
+    "create_mqtt_sensors",
+    "create_omron_bp",
+    "create_rfid_reader",
+    "create_xiaomi_scale",
 ]
+
+
+def create_rfid_reader(bus: EventBus, settings: Settings) -> Sensor:
+    """Mock when MOCK_HARDWARE is true; MFRC522 hardware otherwise."""
+    if settings.MOCK_HARDWARE:
+        return MockRfidReader(bus)
+    return Mfrc522RfidReader(bus)  # pragma: no cover - Pi-only path
+
+
+def create_xiaomi_scale(bus: EventBus, settings: Settings, db: Session) -> Sensor:
+    if settings.MOCK_HARDWARE:
+        return MockXiaomiScale(bus)
+    return XiaomiScaleSensor(bus, db)  # pragma: no cover - hardware path
+
+
+def create_omron_bp(bus: EventBus, settings: Settings, db: Session) -> Sensor:
+    if settings.MOCK_HARDWARE:
+        return MockOmronBp(bus)
+    return OmronBpSensor(bus, db)  # pragma: no cover - hardware path
+
+
+def create_mqtt_sensors(bus: EventBus, settings: Settings, db: Session) -> Sensor:
+    if settings.MOCK_HARDWARE:
+        return MockMqttSensors(bus)
+    return MqttSensorSubscriber(  # pragma: no cover - real-network path
+        bus,
+        db,
+        broker_host=settings.MQTT_BROKER_HOST,
+        broker_port=settings.MQTT_BROKER_PORT,
+    )
+
+
+def create_all_sensors(
+    bus: EventBus, settings: Settings, db: Session
+) -> dict[str, Sensor]:
+    """Build the kiosk's full sensor set keyed by name.
+
+    The application's lifecycle manager calls ``start()`` and
+    ``stop()`` on each Sensor in coordination with the FSM and sync
+    daemon.
+    """
+    return {
+        "rfid": create_rfid_reader(bus, settings),
+        "xiaomi_scale": create_xiaomi_scale(bus, settings, db),
+        "omron_bp": create_omron_bp(bus, settings, db),
+        "mqtt_sensors": create_mqtt_sensors(bus, settings, db),
+    }

@@ -95,27 +95,32 @@ def test_mock_sensor_set_builds_in_mock_mode(
     monkeypatch.setenv("MOCK_HARDWARE", "true")
 
     from ginhawa_kiosk.core.config import get_settings
-    from ginhawa_kiosk.sensors import build_sensor_set
-    from ginhawa_kiosk.sensors.mock import MockBloodPressureSensor, MockRfidReader
+    from ginhawa_kiosk.fsm import EventBus
+    from ginhawa_kiosk.sensors import (
+        MockMqttSensors,
+        MockOmronBp,
+        MockRfidReader,
+        MockXiaomiScale,
+        create_rfid_reader,
+        create_xiaomi_scale,
+        create_omron_bp,
+        create_mqtt_sensors,
+    )
 
-    sensors = build_sensor_set(get_settings())
-    assert isinstance(sensors.rfid, MockRfidReader)
-    assert isinstance(sensors.blood_pressure, MockBloodPressureSensor)
-
-
-def test_factory_refuses_real_mode_until_implemented(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Production sensor adapters land in a later prompt; until then,
-    MOCK_HARDWARE=false must fail loud rather than silently fall back
-    to mocks (a kiosk recording fake data in production would be
-    catastrophic)."""
-    for key, value in _REQUIRED_ENV.items():
-        monkeypatch.setenv(key, value)
-    monkeypatch.setenv("MOCK_HARDWARE", "false")
-
-    from ginhawa_kiosk.core.config import get_settings
-    from ginhawa_kiosk.sensors import build_sensor_set
-
-    with pytest.raises(NotImplementedError, match="MOCK_HARDWARE=true"):
-        build_sensor_set(get_settings())
+    settings = get_settings()
+    bus = EventBus()
+    # db is only consulted on .start() for the real implementations;
+    # the mocks ignore it. Pass None to confirm that.
+    assert isinstance(create_rfid_reader(bus, settings), MockRfidReader)
+    assert isinstance(
+        create_xiaomi_scale(bus, settings, db=None),  # type: ignore[arg-type]
+        MockXiaomiScale,
+    )
+    assert isinstance(
+        create_omron_bp(bus, settings, db=None),  # type: ignore[arg-type]
+        MockOmronBp,
+    )
+    assert isinstance(
+        create_mqtt_sensors(bus, settings, db=None),  # type: ignore[arg-type]
+        MockMqttSensors,
+    )

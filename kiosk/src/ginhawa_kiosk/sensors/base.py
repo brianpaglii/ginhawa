@@ -1,97 +1,48 @@
-"""Sensor adapter abstract base classes.
+"""Abstract base for kiosk sensors.
 
-Every sensor type the kiosk reads from is wrapped by an adapter that
-inherits from one of the bases here. The adapter exposes a small,
-typed surface (``acquire`` / ``read_once`` / ``scan``) so the FSM
-treats real hardware and mocks identically.
+All sensors implement this surface. Sensors are event-driven: they
+push :class:`MeasurementProposed` (or :class:`RfidScanned`) events to
+the event bus when relevant inputs arrive — they do NOT return values
+to their caller, and they do NOT write directly to the database. The
+event bus is the integration point with the rest of the kiosk; the
+persistence layer subscribes and writes rows.
 
-All read methods raise ``SensorUnavailable`` when the hardware is
-absent or returns an unrecoverable error. The session FSM treats
-``SensorUnavailable`` as "record this measurement as unavailable and
-continue" — it does NOT crash the session (CLAUDE.md, "Failure modes").
+Each sensor has a mock implementation (for development on a laptop
+without hardware) and a real implementation (for the Pi with hardware
+connected). The factory in :mod:`ginhawa_kiosk.sensors.__init__`
+selects between them based on ``Settings.MOCK_HARDWARE``.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 
 
 class SensorUnavailable(Exception):
-    """Raised when a sensor read or scan cannot complete.
+    """Raised when a sensor cannot complete its setup.
 
-    Carries a short, log-safe message; does NOT carry the underlying
-    sensor payload (which may include patient identifiers).
+    Carries a short, log-safe message; does NOT carry sensor payloads
+    (which may include patient identifiers).
     """
 
 
-@dataclass(frozen=True)
-class BloodPressureReading:
-    systolic_mmhg: float
-    diastolic_mmhg: float
-
-
-@dataclass(frozen=True)
-class PulseOxReading:
-    spo2_percent: float
-    heart_rate_bpm: float
-
-
-@dataclass(frozen=True)
-class TemperatureReading:
-    temperature_celsius: float
-
-
-@dataclass(frozen=True)
-class HeightReading:
-    height_cm: float
-
-
-@dataclass(frozen=True)
-class WeightReading:
-    weight_kg: float
-
-
-@dataclass(frozen=True)
-class RfidScan:
-    """One RFID card scan. ``uid`` is the raw UID string from the card."""
-
-    uid: str
-
-
-class BaseRfidReader(ABC):
-    @abstractmethod
-    def scan(self, timeout_seconds: float) -> RfidScan | None:
-        """Block up to ``timeout_seconds``; return ``None`` if no card was tapped."""
-
-
-class BaseBloodPressureSensor(ABC):
-    @abstractmethod
-    def acquire(self) -> BloodPressureReading:
-        """Initiate the BP measurement and return the result."""
-
-
-class BasePulseOximeter(ABC):
-    @abstractmethod
-    def read_once(self) -> PulseOxReading:
-        """Take one stable SpO2 + heart-rate reading."""
-
-
-class BaseThermalCamera(ABC):
-    @abstractmethod
-    def read_once(self) -> TemperatureReading:
-        """Capture one centre-ROI peak temperature reading."""
-
-
-class BaseAnthropometricSensor(ABC):
-    """Height, via the VL53L0X time-of-flight sensor on ESP32-B."""
+class Sensor(ABC):
+    """Common base for all kiosk sensors."""
 
     @abstractmethod
-    def read_once(self) -> HeightReading: ...
+    async def start(self) -> None:
+        """Begin listening for events from the underlying device.
 
-
-class BaseScale(ABC):
-    """Weight, via the Xiaomi Smart Scale S200 BLE advertisement."""
+        Idempotent: calling start() on an already-running sensor is a
+        no-op (or raises if the implementation can't safely no-op).
+        """
 
     @abstractmethod
-    def read_once(self) -> WeightReading: ...
+    async def stop(self) -> None:
+        """Clean shutdown. Releases hardware handles and joins
+        background threads. Idempotent."""
+
+    @property
+    @abstractmethod
+    def is_running(self) -> bool:
+        """True between successful ``start()`` and ``stop()``."""
