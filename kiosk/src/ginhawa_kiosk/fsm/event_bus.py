@@ -67,8 +67,30 @@ class PathSelected(Event):
     path: str  # 'vitals' | 'anthropometric' | 'full'
 
 
-class MeasurementCaptured(Event):
-    measurement_id: str
+class MeasurementProposed(Event):
+    """A measurement payload coming off a sensor adapter.
+
+    Carries the full sensor reading so the wiring layer can run
+    ``validate_measurement`` and persist a single Measurement row
+    with the validation-service's verdict — one write per
+    measurement, not two. ``claimed_is_valid`` is the kiosk's
+    *belief* (typically ``True`` from the sensor adapter that
+    parsed the BLE/MQTT payload); the validation service has the
+    final say on the persisted ``is_valid`` and may override it
+    with a ``validation_notes`` string.
+
+    There is no separate ``MeasurementCaptured`` event today. If a
+    future GUI subscriber needs notification *after* persistence
+    (e.g., real-time on-screen display of the just-saved row), add
+    a second event class then — don't pre-emptively split the
+    surface.
+    """
+
+    measurement_type: str
+    value: float
+    unit: str
+    source_device: str
+    claimed_is_valid: bool
 
 
 class MeasurementPathComplete(Event):
