@@ -65,6 +65,14 @@ _BP_MEASUREMENT_CHAR_UUID = "00002a35-0000-1000-8000-00805f9b34fb"
 _CUFF_MAC_CONFIG_KEY = "omron_cuff_mac"
 _SOURCE_DEVICE = "omron_hem7155t"
 
+# Retry budget for the connect() handshake. Total worst-case window:
+# (RETRIES - 1) * DELAY ≈ 8 s of patience for the cuff to start
+# advertising after the user presses the BT button. Tuned for the
+# bench-tested HEM-7155T behaviour where the BT button takes a
+# beat to flip the radio into pairing mode.
+_BP_CONNECT_RETRIES = 5
+_BP_CONNECT_RETRY_DELAY_S = 2.0
+
 
 # ---------------------------------------------------------------------------
 # SFLOAT-16 + payload parsing — pure logic, fully testable
@@ -198,8 +206,28 @@ class MockOmronBp(Sensor):
 
 
 # ---------------------------------------------------------------------------
-# Real — bleak + bleak-retry-connector
+# Real — plain bleak (omblepy-style direct connect)
 # ---------------------------------------------------------------------------
+#
+# We pass the MAC straight to ``bleak.BleakClient(mac).connect()``, the same
+# pattern userx14/omblepy uses on the same cuff family. Two earlier attempts
+# went wrong:
+#
+# 1. ``bleak_retry_connector.establish_connection(BleakClient, mac_str, mac_str)``
+#    — fails at runtime with "'str' object has no attribute 'details'"
+#    because the connector dereferences ``device.details`` on its second
+#    positional arg, which the type stub already says must be a BLEDevice.
+# 2. ``establish_connection(BleakClient, await find_device_by_address(mac), mac)``
+#    — works, but adds a 20 s scan window the user has to wait through
+#    every BP measurement, just to obtain a BLEDevice handle that bleak's
+#    own connect() machinery would have resolved internally anyway.
+#
+# Plain BleakClient skips the explicit scan: BlueZ already knows the
+# pre-paired device (see Phase 0 plan, "Pair and capture the Omron BP
+# cuff"), and ``connect()`` resolves and connects in 1–3 s in practice.
+# We replace bleak-retry-connector's transparent retry with our own small
+# retry loop scoped to the kinds of transient failure the cuff actually
+# produces during a pairing-mode handshake.
 
 
 class OmronBpSensor(Sensor):
@@ -288,19 +316,19 @@ class OmronBpSensor(Sensor):
         * Test path (``self._client_factory`` is set): the factory
           returns an async context manager; we use ``async with`` to
           enter and leave it. Mocked factories produce real context
-          managers in unit tests, so this is the simpler shape.
+          managers in unit tests.
 
-        * Real path (``bleak`` + ``bleak-retry-connector``): we resolve
-          the MAC to a ``BLEDevice`` via
-          ``BleakScanner.find_device_by_address`` (timeout 20 s — the
-          user needs that long to put the cuff into pairing mode after
-          the kiosk publishes ``BpMeasurementRequested``), then call
-          ``establish_connection`` which returns an *already-connected*
-          client (NOT a context manager). We use explicit
-          ``try``/``finally`` with ``await client.disconnect()`` so we
-          never call ``__aenter__`` on an already-connected client (which
-          would raise "Client is already connected" — a real-hardware
-          bug we hit on the bench in 2026-05-02 testing).
+        * Real path: ``bleak.BleakClient(mac).connect()`` directly,
+          mirroring userx14/omblepy. BlueZ has the cuff cached from
+          commissioning, so direct connect is fast (1–3 s typical).
+          We retry ``_BP_CONNECT_RETRIES`` times with
+          ``_BP_CONNECT_RETRY_DELAY_S`` seconds between attempts to
+          absorb the transient "not advertising yet" window between
+          the user pressing the BT button and the cuff actually
+          starting to broadcast. After the final retry exhausts, we
+          surface a clear error pointing at pairing mode.
+          ``client.disconnect()`` is in a ``finally`` block so we
+          always release the BLE handle even on notify timeout.
         """
         import asyncio
 
@@ -318,16 +346,33 @@ class OmronBpSensor(Sensor):
                 await client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
             return payload
 
-        from bleak import BleakClient, BleakScanner
-        from bleak_retry_connector import establish_connection
+        from bleak import BleakClient
+        from bleak.exc import BleakError
 
-        device = await BleakScanner.find_device_by_address(mac, timeout=20.0)
-        if device is None:
+        client = BleakClient(mac)
+        last_error: Exception | None = None
+        for attempt in range(_BP_CONNECT_RETRIES):
+            try:
+                await client.connect()
+                break
+            except (BleakError, asyncio.TimeoutError) as exc:
+                last_error = exc
+                self._logger.warning(
+                    "omron_bp.connect_attempt_failed",
+                    mac=mac,
+                    attempt=attempt + 1,
+                    of=_BP_CONNECT_RETRIES,
+                    error=str(exc),
+                )
+                if attempt < _BP_CONNECT_RETRIES - 1:
+                    await asyncio.sleep(_BP_CONNECT_RETRY_DELAY_S)
+        else:
             raise RuntimeError(
-                f"Omron HEM-7155T at {mac} not advertising — put the "
-                "cuff into pairing mode and try again"
+                f"Omron HEM-7155T at {mac} did not connect after "
+                f"{_BP_CONNECT_RETRIES} attempts — put the cuff into "
+                f"pairing mode and try again (last error: {last_error})"
             )
-        client = await establish_connection(BleakClient, device, mac)
+
         try:
             await client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
             payload = await asyncio.wait_for(received, timeout=120.0)

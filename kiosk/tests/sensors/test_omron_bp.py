@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from sqlalchemy.orm import Session
 
 from ginhawa_kiosk.fsm import EventBus, MeasurementProposed
 from ginhawa_kiosk.sensors.omron_bp import (
@@ -196,8 +195,12 @@ def test_parse_sfloat16_negative_mantissa() -> None:
 async def test_omron_bp_sensor_publish_reading(
     bus: EventBus,
     captured_measurements: list[MeasurementProposed],
-    db_session: Session,
+    mocker: Any,
 ) -> None:
+    # _publish_reading doesn't touch the database; a mock session
+    # is plenty and keeps the test independent of SQLCipher's system
+    # library being installed.
+    db_session = mocker.MagicMock(name="DbSession")
     sensor = OmronBpSensor(bus, db_session)
     assert sensor.is_running is False
 
@@ -217,57 +220,100 @@ async def test_omron_bp_sensor_publish_reading(
 
 
 # ---------------------------------------------------------------------------
-# Real-hardware-path tests added 2026-05-02 after bench-testing fixes.
+# Real-hardware-path tests — plain bleak.BleakClient(mac).connect()
 # ---------------------------------------------------------------------------
+#
+# Pattern lifted from userx14/omblepy: pass the MAC straight to
+# BleakClient and let BlueZ's known-device cache resolve it. No
+# pre-scan, no bleak-retry-connector. Tests patch BleakClient itself
+# so we can verify the connect → start_notify → stop_notify →
+# disconnect handshake without hardware.
 
 
-# Verifies OmronBpSensor resolves the configured MAC to a BLEDevice
-# via BleakScanner.find_device_by_address with a 20-second timeout
-# before calling establish_connection. The 20s window is required so
-# the user has time to put the cuff into pairing mode after the kiosk
-# publishes BpMeasurementRequested (the cuff's pairing window is
-# user-driven, not protocol-driven).
-# Mortality: would fail if the real path passed mac directly to
-# establish_connection again (the bench-testing bug from 2026-05-02).
+# Verifies the real path passes the configured MAC string directly to
+# BleakClient(mac), then awaits client.connect() — no separate scan,
+# no BLEDevice resolution step. Mirrors omblepy's connection pattern
+# and is the result of the 2026-05-02 bench finding that
+# bleak-retry-connector's BLEDevice requirement adds a 20 s scan
+# window we don't actually need on a pre-paired device.
+# Mortality: would fail if the real path went back to scanning first
+# or to passing a wrapped object to BleakClient.
 @pytest.mark.asyncio
-async def test_omron_bp_uses_find_device_by_address(
+async def test_omron_bp_passes_mac_directly_to_bleak_client(
     bus: EventBus,
     captured_measurements: list[MeasurementProposed],
-    db_session: Session,
     mocker: Any,
 ) -> None:
-    sentinel_device = mocker.MagicMock(name="BLEDevice")
-    find_mock = mocker.patch(
-        "bleak.BleakScanner.find_device_by_address",
-        return_value=sentinel_device,
-    )
-
+    db_session = mocker.MagicMock(name="DbSession")
     payload = bytes([0x04, 0x78, 0x00, 0x50, 0x00, 0x5D, 0x00, 0x48, 0x00])
     mock_client = _make_mock_connected_client(mocker, payload)
-    mocker.patch(
-        "bleak_retry_connector.establish_connection",
-        return_value=mock_client,
-    )
+    bleak_client_class = mocker.patch("bleak.BleakClient", return_value=mock_client)
 
     sensor = OmronBpSensor(bus, db_session)
     result = await sensor._read_one_notification("AA:BB:CC:DD:EE:FF")
 
     assert result == payload
-    find_mock.assert_called_once_with("AA:BB:CC:DD:EE:FF", timeout=20.0)
+    bleak_client_class.assert_called_once_with("AA:BB:CC:DD:EE:FF")
+    mock_client.connect.assert_awaited_once()
 
 
-# Verifies that when find_device_by_address returns None (cuff not
-# advertising in the 20-second window), the sensor raises a clear
-# RuntimeError naming "pairing mode" so the GUI can surface a useful
-# prompt to the user.
-# Mortality: would fail if the None-check were removed; the code
-# would fall through into establish_connection with a None device
-# and raise an opaque AttributeError instead.
+# Verifies the connect-retry budget: when the first connect()
+# attempts fail with BleakError (cuff not yet advertising after the
+# user pressed the BT button), the sensor retries up to
+# _BP_CONNECT_RETRIES times before giving up. We synthesise two
+# failures followed by a success to confirm the loop continues past
+# transient errors and that we don't pre-emptively fail-fast.
+# Mortality: would fail if the retry loop were dropped (one
+# transient flake would surface as a hard error to the GUI).
+@pytest.mark.asyncio
+async def test_omron_bp_retries_connect_on_transient_failure(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
+) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
+    from bleak.exc import BleakError
+
+    payload = bytes([0x04, 0x78, 0x00, 0x50, 0x00, 0x5D, 0x00, 0x48, 0x00])
+    mock_client = _make_mock_connected_client(mocker, payload)
+    # First two connects fail, third succeeds.
+    mock_client.connect = mocker.AsyncMock(
+        side_effect=[
+            BleakError("not advertising"),
+            BleakError("le-conn-aborted-by-local-host"),
+            None,
+        ]
+    )
+    mocker.patch("bleak.BleakClient", return_value=mock_client)
+    # Speed up the retry sleep so the test stays fast.
+    mocker.patch("asyncio.sleep", new=mocker.AsyncMock())
+
+    sensor = OmronBpSensor(bus, db_session)
+    result = await sensor._read_one_notification("AA:BB:CC:DD:EE:FF")
+
+    assert result == payload
+    assert mock_client.connect.await_count == 3
+
+
+# Verifies that exhausting the retry budget surfaces a clear
+# RuntimeError naming "pairing mode" so the GUI can prompt the user
+# to press the BT button on the cuff again.
+# Mortality: would fail if the for/else didn't raise on retry
+# exhaustion, or if the message lost the "pairing mode" hint that
+# the GUI depends on.
 @pytest.mark.asyncio
 async def test_omron_bp_raises_when_cuff_not_advertising(
-    bus: EventBus, db_session: Session, mocker: Any
+    bus: EventBus, mocker: Any
 ) -> None:
-    mocker.patch("bleak.BleakScanner.find_device_by_address", return_value=None)
+    db_session = mocker.MagicMock(name="DbSession")
+    from bleak.exc import BleakError
+
+    mock_client = mocker.MagicMock(name="BleakClient")
+    mock_client.connect = mocker.AsyncMock(side_effect=BleakError("nope"))
+    mock_client.disconnect = mocker.AsyncMock()
+    mocker.patch("bleak.BleakClient", return_value=mock_client)
+    mocker.patch("asyncio.sleep", new=mocker.AsyncMock())
+
     sensor = OmronBpSensor(bus, db_session)
     with pytest.raises(RuntimeError, match="pairing mode"):
         await sensor._read_one_notification("AA:BB:CC:DD:EE:FF")
@@ -283,20 +329,12 @@ async def test_omron_bp_raises_when_cuff_not_advertising(
 # skipped disconnect.
 @pytest.mark.asyncio
 async def test_omron_bp_disconnects_after_measurement_in_real_path(
-    bus: EventBus, db_session: Session, mocker: Any
+    bus: EventBus, mocker: Any
 ) -> None:
-    sentinel_device = mocker.MagicMock(name="BLEDevice")
-    mocker.patch(
-        "bleak.BleakScanner.find_device_by_address",
-        return_value=sentinel_device,
-    )
-
+    db_session = mocker.MagicMock(name="DbSession")
     payload = bytes([0x04, 0x78, 0x00, 0x50, 0x00, 0x5D, 0x00, 0x48, 0x00])
     mock_client = _make_mock_connected_client(mocker, payload)
-    mocker.patch(
-        "bleak_retry_connector.establish_connection",
-        return_value=mock_client,
-    )
+    mocker.patch("bleak.BleakClient", return_value=mock_client)
 
     sensor = OmronBpSensor(bus, db_session)
     await sensor._read_one_notification("AA:BB:CC:DD:EE:FF")
@@ -314,8 +352,9 @@ async def test_omron_bp_disconnects_after_measurement_in_real_path(
 async def test_omron_bp_publish_reading_emits_three_events_when_pulse_present(
     bus: EventBus,
     captured_measurements: list[MeasurementProposed],
-    db_session: Session,
+    mocker: Any,
 ) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
     sensor = OmronBpSensor(bus, db_session)
     await sensor._publish_reading(
         BpReading(
@@ -340,7 +379,7 @@ async def test_omron_bp_publish_reading_emits_three_events_when_pulse_present(
 
 
 def _make_mock_connected_client(mocker: Any, payload: bytes) -> Any:
-    """Build a mock that mimics an already-connected bleak client.
+    """Build a mock that mimics a bleak.BleakClient instance.
 
     Crucially, ``start_notify`` invokes its callback synchronously
     so the ``received`` future inside _read_one_notification resolves
@@ -352,6 +391,7 @@ def _make_mock_connected_client(mocker: Any, payload: bytes) -> Any:
     async def fake_start_notify(_uuid: str, callback: Any) -> None:
         callback(None, bytearray(payload))
 
+    client.connect = mocker.AsyncMock()
     client.start_notify = mocker.AsyncMock(side_effect=fake_start_notify)
     client.stop_notify = mocker.AsyncMock()
     client.disconnect = mocker.AsyncMock()
