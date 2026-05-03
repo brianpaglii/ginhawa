@@ -1,10 +1,15 @@
 """Shared fixtures for FSM tests.
 
-Each test gets a SQLCipher-encrypted in-test database with all tables
-created via ``init_database``. The FSM is bound to that database with
-a fixed ``device_id`` and ``current_consent_version`` so test-side
-assertions on audit attribution and Session row state are
-deterministic.
+Each test gets an in-test SQLite database with all tables created
+via SQLAlchemy DDL. The FSM is bound to that database with a fixed
+``device_id`` and ``current_consent_version`` so test-side assertions
+on audit attribution and Session row state are deterministic.
+
+The FSM logic itself doesn't depend on SQLCipher — the SQLCipher
+integration is exercised by the dedicated tests in ``tests/db/``.
+Using plain SQLite here means the suite runs on a dev laptop without
+the system ``libsqlcipher`` package; the assertions are about FSM
+behaviour, not the encryption-at-rest contract.
 """
 
 from __future__ import annotations
@@ -12,22 +17,17 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from ginhawa_kiosk.db.base import Base
 from ginhawa_kiosk.db.models import Citizen
-from ginhawa_kiosk.db.session import (
-    create_engine_for_kiosk,
-    init_database,
-    make_session_factory,
-)
 from ginhawa_kiosk.fsm import SessionFSM
 
 
-_TEST_KEY = "0" * 64  # pragma: allowlist secret
 TEST_DEVICE_ID = "00000000-0000-0000-0000-000000000401"
 CURRENT_CONSENT_VERSION = "v2"
 STALE_CONSENT_VERSION = "v1"
@@ -38,9 +38,9 @@ def utc_now_iso() -> str:
 
 
 @pytest.fixture
-def engine(tmp_path: Path) -> Iterator[Engine]:
-    eng = create_engine_for_kiosk(tmp_path / "fsm.db", _TEST_KEY)
-    init_database(eng)
+def engine() -> Iterator[Engine]:
+    eng = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(eng)
     try:
         yield eng
     finally:
@@ -49,7 +49,7 @@ def engine(tmp_path: Path) -> Iterator[Engine]:
 
 @pytest.fixture
 def session_factory(engine: Engine) -> sessionmaker[Session]:
-    return make_session_factory(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
 
 
 @pytest.fixture

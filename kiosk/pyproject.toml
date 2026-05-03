@@ -16,6 +16,10 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.14.0",
     "pyqt6>=6.11.0",
+    # qasync bridges asyncio and the Qt event loop so sensor coroutines
+    # (BLE / MQTT / printer) can run alongside the GUI without a second
+    # thread. It is the maintained replacement for asyncqt.
+    "qasync>=0.27.1",
     "python-escpos>=3.1",
     "sqlalchemy>=2.0",
     "sqlcipher3>=0.6.0",
@@ -46,6 +50,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-httpx>=0.36.2",
     "pytest-mock>=3.15.1",
+    "pytest-qt>=4.5.0",
     "ruff>=0.15.12",
 ]
 
@@ -76,5 +81,6 @@ module = [
     "mfrc522.*",
     "spidev.*",
     "RPi.*",
+    "qasync.*",
 ]
 ignore_missing_imports = true

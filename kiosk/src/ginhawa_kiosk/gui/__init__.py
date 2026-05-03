@@ -1,12 +1,20 @@
-"""PyQt6 screens.
+"""PyQt6 GUI package for the kiosk.
 
-Phase 2 scaffolding only — placeholders for IDLE / RFID / CONSENT /
-MEASURE / REVIEW / PRINT screens land here in subsequent prompts.
-The GUI imports from ``fsm/`` (state transitions) and ``services/``
-(measurement / printer outcomes); it does NOT import from ``db/`` or
-``sensors/`` directly. The FSM is the single rendezvous point.
+The kiosk runs as a single PyQt6 application: ``KioskMainWindow``
+(in :mod:`.main_window`) owns a ``QStackedWidget`` whose pages map
+1:1 to the FSM's states. State transitions on the FSM emit a Qt
+signal that the main window listens to, switching the visible page;
+the screens themselves emit user-action signals (e.g.,
+``language_chosen``, ``consent_given``) that the main window
+forwards to the FSM as triggers. Screens never directly call
+``main_window.set_state()`` — the FSM is the source of truth.
 
-PyQt6 imports are deliberately not pulled into this ``__init__`` so
-the package can be imported on a headless CI runner without the Qt6
-system libraries installed.
+Subpackages:
+
+* :mod:`.screens` — one widget per FSM state.
+* :mod:`.strings` — bilingual string catalogue (EN/TL).
+
+Importing this package does NOT instantiate any Qt widgets. Widget
+construction happens only when :class:`.main_window.KioskMainWindow`
+is instantiated in :mod:`ginhawa_kiosk.__main__`.
 """

@@ -145,6 +145,11 @@ class IntegrationDriver:
             details={"rfid_uid": event.uid, "found": citizen is not None},
         )
         self.fsm.citizen_identified(citizen)
+        # The Phase 2 p1-5 integration test predates the LANGUAGE_SELECT
+        # state added in prompt 8; default to English so the rest of the
+        # thread (CONSENT / PATH_CHOICE / measuring / report) still
+        # exercises the same code paths.
+        self.fsm.language_chosen("en")
 
     async def _on_path_selected(self, event: PathSelected) -> None:
         self.fsm.path_selected(event.path)
@@ -306,8 +311,8 @@ async def test_full_session_with_sync_daemon(
     assert fsm.state == State.IDLE
 
     await bus.publish(RfidScanned(uid="INTEGRATION_TEST_001"))
-    assert fsm.state == State.MENU, (
-        f"expected MENU after rfid scan + lookup; got {fsm.state}"
+    assert fsm.state == State.PATH_CHOICE, (
+        f"expected PATH_CHOICE after rfid scan + lookup + language; got {fsm.state}"
     )
     assert fsm.current_session is not None
 
@@ -333,7 +338,7 @@ async def test_full_session_with_sync_daemon(
         )
 
     await bus.publish(MeasurementPathCompleteEvent())
-    assert fsm.state == State.MEASURING_ANTHROPOMETRIC
+    assert fsm.state == State.MEASURING_ANTHRO
 
     anthro = [
         ("height", 165.0, "cm", "mock_vl53l0x"),
@@ -422,7 +427,8 @@ async def test_full_session_with_sync_daemon(
         f"expected citizen.read audit row; saw actions={actions}"
     )
     assert "fsm.rfid_scanned" in actions
-    assert "fsm.menu" in actions
+    assert "fsm.session_started" in actions
+    assert "fsm.language_chosen" in actions
     assert "fsm.path_selected" in actions
     assert actions.count("fsm.measurement_captured") == 8, (
         f"expected 8 measurement_captured audits, got "
@@ -515,7 +521,7 @@ async def test_out_of_range_measurement_marked_invalid(
     citizen: Citizen,
 ) -> None:
     await bus.publish(RfidScanned(uid="INTEGRATION_TEST_001"))
-    assert fsm.state == State.MENU
+    assert fsm.state == State.PATH_CHOICE
 
     await bus.publish(PathSelected(path="vitals"))
     assert fsm.state == State.MEASURING_VITALS

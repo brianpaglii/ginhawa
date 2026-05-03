@@ -30,7 +30,13 @@ from .event_bus import (
     RfidScanned,
     TimeoutFired,
 )
-from .session_fsm import SessionFSM, State
+from .session_fsm import (
+    FsmSnapshot,
+    IdentificationResult,
+    Language,
+    SessionFSM,
+    State,
+)
 
 __all__ = [
     "Acknowledge",
@@ -42,6 +48,9 @@ __all__ = [
     "Event",
     "EventBus",
     "FinishWithoutPrinting",
+    "FsmSnapshot",
+    "IdentificationResult",
+    "Language",
     "MeasurementProposed",
     "MeasurementPathComplete",
     "PaperOutDetected",
