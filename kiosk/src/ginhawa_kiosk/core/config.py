@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     MQTT_BROKER_HOST: str = "localhost"
     MQTT_BROKER_PORT: int = 1883
 
+    # --- Thermal printer (Xprinter XP-58IIH, ESC/POS over USB) ----------
+    # VID/PID typically 0x0416 / 0x5011 — verify per unit with `lsusb`
+    # before deploying. Encoded as integers in env (decimal or hex with
+    # ``0x`` prefix); pydantic accepts both forms.
+    PRINTER_VENDOR_ID: int = 0x0416
+    PRINTER_PRODUCT_ID: int = 0x5011
+
     # --- Observability ---------------------------------------------------
     LOG_LEVEL: str = "INFO"
 
