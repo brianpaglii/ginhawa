@@ -86,6 +86,7 @@ medical device. It appears in both languages.
 
 from __future__ import annotations
 
+import asyncio
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -438,8 +439,22 @@ class PrinterService(ABC):
         """
 
 
-class XprinterPrinterService(PrinterService):
-    """Production driver for the Xprinter XP-58IIH over USB.
+class EscPosPrinterService(PrinterService):
+    """Production driver for any ESC/POS thermal printer over USB.
+
+    Originally written against the Xprinter XP-58IIH; the 2026-05-04
+    bench test on an STM-based generic 58 mm clone surfaced two
+    portability issues that this class now papers over:
+
+    1. Some printers don't respond to bidirectional ESC/POS status
+       queries (DLE EOT n / GS r n). When ``supports_status_query``
+       is False the service skips paper-status reads entirely and
+       assumes paper is present — best-effort printing.
+    2. python-escpos auto-detects USB endpoints from the descriptor,
+       but generic clones expose them at non-standard addresses
+       (typically IN at ``0x81``, OUT at ``0x01``). Pass explicit
+       ``in_endpoint`` / ``out_endpoint`` integers to override the
+       library's guess.
 
     Each call to :meth:`print_session_report` opens a fresh USB
     handle, prints the receipt, and closes the handle. We do NOT
@@ -447,13 +462,38 @@ class XprinterPrinterService(PrinterService):
     the device from recovering after a USB hub power glitch and
     silently fails the next print. Open/close per-job is slower but
     self-healing.
+
+    Concurrency: an ``asyncio.Lock`` serialises ``print_session_report``
+    calls so a wiring bug that fires two prints in parallel can't
+    corrupt the device. The FSM should never invoke this concurrently
+    in production — the lock is defence-in-depth.
     """
 
-    def __init__(self, *, vendor_id: int, product_id: int) -> None:
+    def __init__(
+        self,
+        vendor_id: int,
+        product_id: int,
+        in_endpoint: int | None = None,
+        out_endpoint: int | None = None,
+        supports_status_query: bool = True,
+        profile: str | None = None,
+    ) -> None:
         self._vendor_id = vendor_id
         self._product_id = product_id
+        self._in_endpoint = in_endpoint
+        self._out_endpoint = out_endpoint
+        self._supports_status_query = supports_status_query
+        self._profile = profile
+        self._print_lock = asyncio.Lock()
 
-    def is_paper_present(self) -> bool:  # pragma: no cover — exercised on Pi
+    def is_paper_present(self) -> bool:
+        if not self._supports_status_query:
+            # Hardware doesn't expose ESC/POS DLE EOT / GS r. There's
+            # no portable way to ask "is paper loaded?" without it,
+            # so we assume yes and let the print attempt fail visibly
+            # if the roll is empty. Operators can spot a paper-out by
+            # checking the receipt tray.
+            return True
         try:
             p = self._open_printer()
         except Exception as exc:
@@ -473,7 +513,7 @@ class XprinterPrinterService(PrinterService):
         finally:
             self._safe_close(p)
 
-    def is_available(self) -> bool:  # pragma: no cover — exercised on Pi
+    def is_available(self) -> bool:
         try:
             p = self._open_printer()
         except Exception as exc:
@@ -493,9 +533,22 @@ class XprinterPrinterService(PrinterService):
         citizen: Citizen,
         measurements: list[Measurement],
         language: Language,
-    ) -> PrintResult:  # pragma: no cover — exercised on Pi
-        # Pre-flight: is paper loaded? If not, abort before touching
-        # the device — the FSM transitions to END with paper_out_pre.
+    ) -> PrintResult:
+        async with self._print_lock:
+            return await self._print_session_report_locked(
+                session, citizen, measurements, language
+            )
+
+    async def _print_session_report_locked(
+        self,
+        session: Session,
+        citizen: Citizen,
+        measurements: list[Measurement],
+        language: Language,
+    ) -> PrintResult:
+        # Pre-flight: is paper loaded? When supports_status_query is
+        # False this short-circuits to True; the print may still fail
+        # with PAPER_OUT_MID (best-effort path).
         if not self.is_paper_present():
             _log.info("printer.paper_out_pre", session_id=session.id)
             return PrintResult(False, PrintedStatus.PAPER_OUT_PRE)
@@ -520,8 +573,11 @@ class XprinterPrinterService(PrinterService):
                 p.text(line + "\n")
                 # Mid-print check: re-query the paper sensor between
                 # lines so we surface a paper-out failure as
-                # PAPER_OUT_MID rather than PRINT_FAILED.
-                if int(p.paper_status()) == 0:
+                # PAPER_OUT_MID rather than PRINT_FAILED. Skipped on
+                # printers that don't support the query — those go
+                # straight from "printing" to PRINTED_OK or, on a
+                # write failure, PRINT_FAILED.
+                if self._supports_status_query and int(p.paper_status()) == 0:
                     _log.warning("printer.paper_out_mid", session_id=session.id)
                     return PrintResult(False, PrintedStatus.PAPER_OUT_MID)
             p.cut()
@@ -544,19 +600,30 @@ class XprinterPrinterService(PrinterService):
         )
         return PrintResult(True, PrintedStatus.PRINTED_OK)
 
-    def _open_printer(self) -> Any:  # pragma: no cover — escpos boundary
+    def _open_printer(self) -> Any:
         # Imported lazily so importing this module on a dev laptop
         # without libusb available doesn't fail at import time.
         # Returned as Any because python-escpos ships without type
-        # stubs (see pyproject.toml mypy overrides) — annotating as
-        # the concrete Usb class would propagate Any through every
-        # caller anyway.
+        # stubs (see pyproject.toml mypy overrides).
         from escpos.printer import Usb
 
-        return Usb(idVendor=self._vendor_id, idProduct=self._product_id)
+        kwargs: dict[str, Any] = {
+            "idVendor": self._vendor_id,
+            "idProduct": self._product_id,
+        }
+        # Only pass the endpoint kwargs when the deployer set them
+        # explicitly — leaving them unset preserves python-escpos's
+        # auto-detect path (correct for most Xprinter and Epson units).
+        if self._in_endpoint is not None:
+            kwargs["in_ep"] = self._in_endpoint
+        if self._out_endpoint is not None:
+            kwargs["out_ep"] = self._out_endpoint
+        if self._profile is not None:
+            kwargs["profile"] = self._profile
+        return Usb(**kwargs)
 
     @staticmethod
-    def _safe_close(p: Any) -> None:  # pragma: no cover — escpos boundary
+    def _safe_close(p: Any) -> None:
         close = getattr(p, "close", None)
         if close is None:
             return
@@ -564,6 +631,14 @@ class XprinterPrinterService(PrinterService):
             close()
         except Exception as exc:
             _log.warning("printer.close_failed", error=type(exc).__name__)
+
+
+# Backward-compat alias. Phase 2 Prompt 7 named the class
+# ``XprinterPrinterService``; Phase 2 Prompt 7.1 generalised it to any
+# ESC/POS printer over USB after the STM-based bench printer surfaced
+# portability issues. Existing callers that import the old name keep
+# working; rename in callers when convenient.
+XprinterPrinterService = EscPosPrinterService
 
 
 class MockPrinterService(PrinterService):
@@ -646,11 +721,19 @@ def create_printer_service(settings: Settings) -> PrinterService:
     """Factory: pick the printer implementation per ``MOCK_HARDWARE``.
 
     The single sanctioned consumer of ``settings.MOCK_HARDWARE`` for
-    the printer subsystem (CLAUDE.md: one switch, one truth).
+    the printer subsystem (CLAUDE.md: one switch, one truth). Threads
+    the four hardware-portability knobs (endpoints, status-query
+    support, python-escpos profile) into the production driver — see
+    ``kiosk/docs/runbook.md`` "Printer hardware portability" for when
+    each one needs overriding.
     """
     if settings.MOCK_HARDWARE:
         return MockPrinterService()
-    return XprinterPrinterService(
-        vendor_id=settings.PRINTER_VENDOR_ID,
-        product_id=settings.PRINTER_PRODUCT_ID,
+    return EscPosPrinterService(
+        vendor_id=settings.KIOSK_PRINTER_VENDOR_ID,
+        product_id=settings.KIOSK_PRINTER_PRODUCT_ID,
+        in_endpoint=settings.KIOSK_PRINTER_USB_IN_ENDPOINT,
+        out_endpoint=settings.KIOSK_PRINTER_USB_OUT_ENDPOINT,
+        supports_status_query=settings.KIOSK_PRINTER_SUPPORTS_STATUS_QUERY,
+        profile=settings.KIOSK_PRINTER_PROFILE,
     )

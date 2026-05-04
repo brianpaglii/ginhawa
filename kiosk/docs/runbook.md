@@ -124,3 +124,133 @@ On Ctrl-C the tool prints a per-event-type summary:
 | `--no-bp-prompt`                    | (off)                                 | Disable the interactive Enter-to-trigger-BP loop |
 
 Mutually exclusive: `--log-file` and `--no-log-file`.
+
+## Printer hardware portability
+
+The kiosk's printer service is built for ESC/POS thermal printers
+over USB. Different printer brands and models expose USB
+differently; the printer service has four config knobs to handle
+this, all read from environment variables and surfaced through
+`Settings`. Defaults match the Xprinter XP-58IIH (the project's
+reference printer); override per deployment when you wire in a
+different unit.
+
+1. **`KIOSK_PRINTER_VENDOR_ID` / `KIOSK_PRINTER_PRODUCT_ID`** —
+   USB VID:PID. Find them with `lsusb`. Encoded as integers in the
+   environment; pydantic accepts both decimal (`1131`) and
+   `0x`-prefixed hex (`0x0483`).
+
+2. **`KIOSK_PRINTER_SUPPORTS_STATUS_QUERY`** — set to `false` if
+   your printer doesn't respond to ESC/POS DLE EOT or GS r commands.
+   _Symptom:_ paper-status check raises `ValueError` ("not enough
+   data" or similar). Default: `true`. Disabling means the kiosk
+   skips paper-out detection; the citizen-facing report screen still
+   shows the Print button (the service can't tell whether paper is
+   present), and a paper-out condition surfaces only as
+   `print_failed` mid-print rather than `paper_out_pre`. Operators
+   should visually inspect the receipt tray.
+
+3. **`KIOSK_PRINTER_USB_IN_ENDPOINT` / `KIOSK_PRINTER_USB_OUT_ENDPOINT`** —
+   override `python-escpos`'s auto-detect when it picks the wrong
+   endpoint. _Symptom:_ print fails with
+   `ValueError: Invalid endpoint address 0xNN`. Find your printer's
+   actual endpoints with:
+
+   ```bash
+   lsusb -v -d <vid>:<pid> 2>/dev/null | grep -A 2 bEndpointAddress
+   ```
+
+   Look for one IN endpoint (high bit set, e.g., `0x81`, `0x82`) and
+   one OUT endpoint (low bit clear, e.g., `0x01`, `0x02`). Default:
+   unset (auto-detect).
+
+4. **`KIOSK_PRINTER_PROFILE`** — `python-escpos` profile name (e.g.,
+   `"TM-T88III"`). Some profiles trigger device queries on init;
+   setting unset (default) or a minimal profile can avoid failures
+   on non-spec-compliant hardware. Default: unset.
+
+### Tested deployments
+
+| Printer                 | VID:PID         | IN endpoint | OUT endpoint | Status query | Profile |
+| ----------------------- | --------------- | ----------- | ------------ | ------------ | ------- |
+| Xprinter XP-58IIH       | `0x0416:0x5011` | auto        | auto         | `true`       | unset   |
+| STM-based generic 58 mm | `0x0483:0x070b` | `0x81`      | `0x01`       | `false`      | unset   |
+
+### Commissioning a new printer
+
+1. Plug in the printer (USB to the Pi; power from its own adapter —
+   never the Pi's USB rail or 5 V GPIO). Confirm it powers up and
+   the paper feeds.
+
+2. Capture VID:PID:
+
+   ```bash
+   lsusb
+   ```
+
+   Note the bus / device line that appeared after plugging in. Set
+   `KIOSK_PRINTER_VENDOR_ID` and `KIOSK_PRINTER_PRODUCT_ID` in the
+   kiosk's environment file (or `.env`) accordingly.
+
+3. Bare ESC/POS smoke test (bypasses our service so you can
+   distinguish "USB / udev problem" from "kiosk service problem"):
+
+   ```bash
+   uv run python -c "
+   from escpos.printer import Usb
+   p = Usb(0xVID, 0xPID)
+   p.text('test\n')
+   p.cut()
+   p.close()
+   "
+   ```
+
+   A receipt should print. If not, the issue is below the kiosk
+   layer — check `/dev/bus/usb` permissions (the kiosk user needs
+   `lp` group, or a udev rule granting access), and make sure CUPS
+   isn't grabbing the device (`sudo systemctl stop cups` while
+   debugging).
+
+4. Paper-status query test:
+
+   ```bash
+   uv run python -c "
+   from escpos.printer import Usb
+   p = Usb(0xVID, 0xPID)
+   print(p.paper_status())
+   p.close()
+   "
+   ```
+
+   - Returns an integer `0`, `1`, or `2` →
+     `KIOSK_PRINTER_SUPPORTS_STATUS_QUERY=true` (the default).
+   - Raises `ValueError` or hangs →
+     `KIOSK_PRINTER_SUPPORTS_STATUS_QUERY=false`.
+
+5. If step 3 worked but a full kiosk print fails with
+   `Invalid endpoint address 0xNN`:
+
+   ```bash
+   lsusb -v -d 0xVID:0xPID 2>/dev/null | grep -A 2 bEndpointAddress
+   ```
+
+   Set `KIOSK_PRINTER_USB_IN_ENDPOINT` and
+   `KIOSK_PRINTER_USB_OUT_ENDPOINT` to match the values reported.
+
+6. End-to-end validation through the production service (NOT the
+   bare-USB bypass):
+
+   ```bash
+   KIOSK_PRINTER_VENDOR_ID=0xVID KIOSK_PRINTER_PRODUCT_ID=0xPID \
+     # plus any endpoint / status-query overrides from steps 4-5 \
+     uv run python -m ginhawa_kiosk.scripts.bench_printer_full
+   ```
+
+   The script prints one English and one Tagalog test receipt
+   through `EscPosPrinterService` (same code path the kiosk uses in
+   production), reports each `PrintedStatus`, and exits non-zero if
+   either receipt failed.
+
+7. Record the working configuration in the "Tested deployments"
+   table above, then commit the env values into the deployment's
+   environment file so subsequent boots pick them up automatically.

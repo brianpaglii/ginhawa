@@ -62,12 +62,45 @@ class Settings(BaseSettings):
     MQTT_BROKER_HOST: str = "localhost"
     MQTT_BROKER_PORT: int = 1883
 
-    # --- Thermal printer (Xprinter XP-58IIH, ESC/POS over USB) ----------
-    # VID/PID typically 0x0416 / 0x5011 — verify per unit with `lsusb`
-    # before deploying. Encoded as integers in env (decimal or hex with
-    # ``0x`` prefix); pydantic accepts both forms.
-    PRINTER_VENDOR_ID: int = 0x0483
-    PRINTER_PRODUCT_ID: int = 0x070b
+    # --- Thermal printer (ESC/POS over USB; portable across vendors) -----
+    # VID/PID. Default is the Xprinter XP-58IIH (0x0416 / 0x5011); override
+    # via ``KIOSK_PRINTER_VENDOR_ID`` / ``KIOSK_PRINTER_PRODUCT_ID`` to
+    # match deployment hardware. Encoded as integers in env (decimal or
+    # hex with ``0x`` prefix); pydantic accepts both forms. Verify per
+    # unit with ``lsusb`` before deploying.
+    #
+    # The 2026-05-04 bench Pi runs an STM-based generic 58mm clone
+    # (0x0483 / 0x070b); its commit a115be0 hard-coded those VIDs as
+    # the default. Prompt 7.1 supersedes that workaround by making the
+    # values env-var-configurable — set them in the bench Pi's
+    # environment file rather than in the source. See
+    # ``kiosk/docs/runbook.md`` "Printer hardware portability".
+    KIOSK_PRINTER_VENDOR_ID: int = 0x0416
+    KIOSK_PRINTER_PRODUCT_ID: int = 0x5011
+
+    # USB endpoints for status reads / command writes.
+    # ``None`` = python-escpos auto-detect (correct for most Xprinter and
+    # Epson units). Override when auto-detect picks the wrong endpoint —
+    # symptom is ``ValueError: Invalid endpoint address 0xNN`` mid-print.
+    # STM-based generic 58mm clones typically expose IN at ``0x81`` and
+    # OUT at ``0x01``; find your printer's actual values with
+    # ``lsusb -v -d <vid>:<pid> | grep -A 2 bEndpointAddress``.
+    KIOSK_PRINTER_USB_IN_ENDPOINT: int | None = None
+    KIOSK_PRINTER_USB_OUT_ENDPOINT: int | None = None
+
+    # Whether the printer responds to ESC/POS bidirectional status
+    # queries (DLE EOT n, GS r n). Generic STM-based printers often
+    # don't — paper_status() raises ValueError on those. When False, the
+    # printer service skips paper-status checks and assumes paper is
+    # present (best-effort printing). Default ``True`` matches Xprinter
+    # and Epson behaviour.
+    KIOSK_PRINTER_SUPPORTS_STATUS_QUERY: bool = True
+
+    # python-escpos profile name (e.g., ``"TM-T88III"``). ``None`` =
+    # library default. Some profiles trigger device queries on init that
+    # break on non-spec-compliant hardware; setting ``None`` is the safe
+    # fallback for unknown printers.
+    KIOSK_PRINTER_PROFILE: str | None = None
 
     # --- Observability ---------------------------------------------------
     LOG_LEVEL: str = "INFO"

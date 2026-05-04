@@ -7,6 +7,7 @@ kiosk's local ``audit_log`` (mirroring the cloud's
 """
 
 from .printer import (
+    EscPosPrinterService,
     MockPrinterService,
     PrinterService,
     PrintResult,
@@ -16,6 +17,7 @@ from .printer import (
 )
 
 __all__ = [
+    "EscPosPrinterService",
     "MockPrinterService",
     "PrintResult",
     "PrintedStatus",

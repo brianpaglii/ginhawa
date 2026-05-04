@@ -470,8 +470,12 @@ async def test_failure_modes_return_distinct_statuses() -> None:
 def test_create_printer_service_respects_mock_hardware_switch() -> None:
     class _FakeSettings:
         MOCK_HARDWARE = True
-        PRINTER_VENDOR_ID = 0x0416
-        PRINTER_PRODUCT_ID = 0x5011
+        KIOSK_PRINTER_VENDOR_ID = 0x0416
+        KIOSK_PRINTER_PRODUCT_ID = 0x5011
+        KIOSK_PRINTER_USB_IN_ENDPOINT = None
+        KIOSK_PRINTER_USB_OUT_ENDPOINT = None
+        KIOSK_PRINTER_SUPPORTS_STATUS_QUERY = True
+        KIOSK_PRINTER_PROFILE = None
 
     mock_svc = create_printer_service(_FakeSettings())  # type: ignore[arg-type]
     assert isinstance(mock_svc, MockPrinterService)
