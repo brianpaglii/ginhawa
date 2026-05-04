@@ -45,16 +45,23 @@ inventory clarity; consult CLAUDE.md before substituting any item.
 
 ### MFRC522 → Pi 5 pin map
 
-| MFRC522 | Pi 5 (BCM)   | Notes                                                                                                                   |
-| ------- | ------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| SDA     | GPIO 8 (CE0) | SPI chip-select                                                                                                         |
-| SCK     | GPIO 11      | SPI clock                                                                                                               |
-| MOSI    | GPIO 10      | SPI MOSI                                                                                                                |
-| MISO    | GPIO 9       | SPI MISO                                                                                                                |
-| IRQ     | GPIO 24      | Edge-triggered card-present (unused by current driver, but wired so the runtime can be flipped to interrupt mode later) |
-| RST     | GPIO 25      | Reset                                                                                                                   |
-| 3V3     | 3.3 V        | Do NOT use 5 V.                                                                                                         |
-| GND     | GND          |                                                                                                                         |
+Both columns are given so the wiring can be checked against the
+header without a second reference: the BCM column is what the
+`mfrc522` / `spidev` / `rpi-lgpio` Python stack uses in code; the
+physical column is what you count on the 40-pin header (top-left =
+pin 1 with the Pi's USB ports facing right; odd pins on the outer
+row, even pins on the inner row).
+
+| MFRC522 | Pi 5 (BCM)   | Pi 5 physical pin | Notes                                                                                                                   |
+| ------- | ------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| SDA     | GPIO 8 (CE0) | pin 24            | SPI0 chip-select                                                                                                        |
+| SCK     | GPIO 11      | pin 23            | SPI0 clock                                                                                                              |
+| MOSI    | GPIO 10      | pin 19            | SPI0 MOSI                                                                                                               |
+| MISO    | GPIO 9       | pin 21            | SPI0 MISO                                                                                                               |
+| IRQ     | GPIO 24      | pin 18            | Edge-triggered card-present (unused by current driver, but wired so the runtime can be flipped to interrupt mode later) |
+| RST     | GPIO 25      | pin 22            | Reset                                                                                                                   |
+| 3V3     | 3.3 V        | pin 1 (or pin 17) | Do NOT use 5 V.                                                                                                         |
+| GND     | GND          | pin 25            | Any GND pin works; pin 25 sits next to the SPI cluster on the header                                                    |
 
 ### Hardware safety rules (absolute)
 
@@ -144,11 +151,11 @@ All five suites pass = the laptop is correctly set up.
 Target: a fresh Raspberry Pi 5, Raspberry Pi OS trixie installed,
 network and SSH already configured.
 
-
 RFID Setup
-  - sudo apt install libsqlcipher-dev python3-lgpio
-  - sudo raspi-config → Interface Options → SPI → Enable, then reboot
-  - sudo rfkill unblock bluetooth (one time, persists across reboots
+
+- sudo apt install libsqlcipher-dev python3-lgpio
+- sudo raspi-config → Interface Options → SPI → Enable, then reboot
+- sudo rfkill unblock bluetooth (one time, persists across reboots
 
 ### Choose your starting state
 
