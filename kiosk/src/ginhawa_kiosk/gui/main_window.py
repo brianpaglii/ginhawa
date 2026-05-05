@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session as SAOrmSession
 
 from ..db.models import Citizen, Measurement
 from ..fsm import (
+    BpMeasurementRequested,
     EventBus,
     FsmSnapshot,
     Language,
@@ -275,7 +276,9 @@ class KioskMainWindow(QMainWindow):
     def _configure_state_specific(
         self, state: str, snapshot: FsmSnapshot, language: Language
     ) -> None:
-        if state == State.REPORT:
+        if state == State.MEASURING_VITALS:
+            asyncio.create_task(self._bus.publish(BpMeasurementRequested()))
+        elif state == State.REPORT:
             self._render_report(snapshot, language)
         elif state == State.PRINTING:
             self._kick_off_print_job(snapshot, language)
