@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -401,14 +402,15 @@ async def test_omron_bp_passes_mac_directly_to_bleak_client(
     mocker: Any,
 ) -> None:
     db_session = mocker.MagicMock(name="DbSession")
-    payload = bytes([0x04, 0x78, 0x00, 0x50, 0x00, 0x5D, 0x00, 0x48, 0x00])
+    payload = _fresh_bp_payload()
     mock_client = _make_mock_connected_client(mocker, payload)
     bleak_client_class = mocker.patch("bleak.BleakClient", return_value=mock_client)
 
     sensor = OmronBpSensor(bus, db_session)
-    result = await sensor._read_one_notification("AA:BB:CC:DD:EE:FF")
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
 
-    assert result == payload
+    assert reading is not None
+    assert reading.systolic_mmhg == pytest.approx(120.0)
     bleak_client_class.assert_called_once_with("AA:BB:CC:DD:EE:FF")
     mock_client.connect.assert_awaited_once()
 
@@ -430,7 +432,7 @@ async def test_omron_bp_retries_connect_on_transient_failure(
     db_session = mocker.MagicMock(name="DbSession")
     from bleak.exc import BleakError
 
-    payload = bytes([0x04, 0x78, 0x00, 0x50, 0x00, 0x5D, 0x00, 0x48, 0x00])
+    payload = _fresh_bp_payload()
     mock_client = _make_mock_connected_client(mocker, payload)
     # First two connects fail, third succeeds.
     mock_client.connect = mocker.AsyncMock(
@@ -445,9 +447,9 @@ async def test_omron_bp_retries_connect_on_transient_failure(
     mocker.patch("asyncio.sleep", new=mocker.AsyncMock())
 
     sensor = OmronBpSensor(bus, db_session)
-    result = await sensor._read_one_notification("AA:BB:CC:DD:EE:FF")
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
 
-    assert result == payload
+    assert reading is not None
     assert mock_client.connect.await_count == 3
 
 
@@ -472,7 +474,7 @@ async def test_omron_bp_raises_when_cuff_not_advertising(
 
     sensor = OmronBpSensor(bus, db_session)
     with pytest.raises(RuntimeError, match="pairing mode"):
-        await sensor._read_one_notification("AA:BB:CC:DD:EE:FF")
+        await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
 
 
 # Verifies the real path explicitly disconnects after a successful
@@ -488,14 +490,166 @@ async def test_omron_bp_disconnects_after_measurement_in_real_path(
     bus: EventBus, mocker: Any
 ) -> None:
     db_session = mocker.MagicMock(name="DbSession")
-    payload = bytes([0x04, 0x78, 0x00, 0x50, 0x00, 0x5D, 0x00, 0x48, 0x00])
+    payload = _fresh_bp_payload()
     mock_client = _make_mock_connected_client(mocker, payload)
     mocker.patch("bleak.BleakClient", return_value=mock_client)
 
     sensor = OmronBpSensor(bus, db_session)
-    await sensor._read_one_notification("AA:BB:CC:DD:EE:FF")
+    await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
 
     mock_client.disconnect.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Drain-until-fresh tests (2026-05-06 bench fix)
+# ---------------------------------------------------------------------------
+#
+# The HEM-7155T's store-and-forward BLE model dumps any buffered
+# readings on connect. Pre-fix, the kiosk read ONE notification,
+# saw it was stale, and disconnected — the freshly-pressed
+# measurement that followed never landed. Post-fix, we drain stored
+# readings until a fresh one arrives or an outer timeout fires.
+
+
+# Verifies the drain loop publishes ONLY for the fresh reading when
+# the cuff dumps two stale stored readings followed by a fresh one.
+# Two stale readings should be logged as ``stored_reading_drained``
+# and discarded; the fresh one becomes three MeasurementProposed
+# events (systolic / diastolic / heart_rate).
+# Mortality: would fail if the drain loop returned early on the
+# first notification (the original bug) or if it kept publishing
+# stale readings.
+@pytest.mark.asyncio
+async def test_drains_stored_readings_and_captures_fresh(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
+) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
+    now = datetime.now(timezone.utc)
+    stale_a = _build_bp_payload(
+        now - timedelta(hours=5), systolic=140, diastolic=85, pulse=70
+    )
+    stale_b = _build_bp_payload(
+        now - timedelta(minutes=30), systolic=135, diastolic=82, pulse=68
+    )
+    fresh = _build_bp_payload(now, systolic=120, diastolic=80, pulse=72)
+    mock_client = _make_mock_connected_client(mocker, stale_a, stale_b, fresh)
+    mocker.patch("bleak.BleakClient", return_value=mock_client)
+
+    log = _CapturingLogger()
+    sensor = OmronBpSensor(bus, db_session)
+    sensor._logger = log
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+
+    assert reading is not None
+    assert reading.systolic_mmhg == pytest.approx(120.0)
+    assert reading.diastolic_mmhg == pytest.approx(80.0)
+
+    drained = [e for e in log.events if e[1] == "omron_bp.stored_reading_drained"]
+    assert len(drained) == 2, f"expected 2 stored_reading_drained logs, got {drained}"
+    received = [e for e in log.events if e[1] == "omron_bp.measurement_received"]
+    assert len(received) == 1
+
+
+# Verifies the outer timeout fires when the cuff only dumps stale
+# readings and never produces a fresh one. The drain loop should
+# log ``omron_bp.fresh_reading_timeout`` with stale_count >= 1 and
+# return None — no MeasurementProposed published.
+# Mortality: would fail if the timeout were missing (the loop would
+# block forever on queue.get) or if stale_count were dropped from
+# the log line.
+@pytest.mark.asyncio
+async def test_timeout_fires_when_no_fresh_reading(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
+) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
+    now = datetime.now(timezone.utc)
+    stale_a = _build_bp_payload(now - timedelta(hours=5), systolic=140, diastolic=85)
+    stale_b = _build_bp_payload(now - timedelta(hours=1), systolic=132, diastolic=84)
+    mock_client = _make_mock_connected_client(mocker, stale_a, stale_b)
+    mocker.patch("bleak.BleakClient", return_value=mock_client)
+    # Compress the wall-clock budget so the test runs quickly.
+    mocker.patch("ginhawa_kiosk.sensors.omron_bp._BP_FRESH_READ_TIMEOUT_S", 0.05)
+
+    log = _CapturingLogger()
+    sensor = OmronBpSensor(bus, db_session)
+    sensor._logger = log
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+
+    assert reading is None
+    assert captured_measurements == []
+    timeouts = [e for e in log.events if e[1] == "omron_bp.fresh_reading_timeout"]
+    assert len(timeouts) == 1
+    level, _event, kwargs = timeouts[0]
+    assert level == "warning"
+    assert kwargs["stale_count"] >= 1
+    assert kwargs["timeout_s"] == pytest.approx(0.05)
+
+
+# Verifies that when the very first notification is fresh, the
+# drain loop returns it immediately with no stored_reading_drained
+# logs in between. Confirms the happy-path is unaffected by the
+# new draining behaviour.
+# Mortality: would fail if the loop spuriously logged
+# stored_reading_drained for fresh readings.
+@pytest.mark.asyncio
+async def test_immediate_fresh_reading(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
+) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
+    fresh = _build_bp_payload(
+        datetime.now(timezone.utc), systolic=118, diastolic=78, pulse=70
+    )
+    mock_client = _make_mock_connected_client(mocker, fresh)
+    mocker.patch("bleak.BleakClient", return_value=mock_client)
+
+    log = _CapturingLogger()
+    sensor = OmronBpSensor(bus, db_session)
+    sensor._logger = log
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+
+    assert reading is not None
+    assert reading.systolic_mmhg == pytest.approx(118.0)
+    drained = [e for e in log.events if e[1] == "omron_bp.stored_reading_drained"]
+    assert drained == []
+    received = [e for e in log.events if e[1] == "omron_bp.measurement_received"]
+    assert len(received) == 1
+
+
+# Verifies the drain loop tolerates a malformed indicate (parse
+# failure) and continues to the next notification rather than
+# aborting the whole drain. The cuff sends a 3-byte garbage payload
+# (too short for parse_bp_measurement), then a fresh reading; we
+# should publish for the fresh reading and log parse_failed once.
+# Mortality: would fail if the parse-failure branch returned
+# instead of continuing.
+@pytest.mark.asyncio
+async def test_parse_failure_skipped_drain_continues(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
+) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
+    garbage = bytes([0x04, 0x78, 0x00])  # too short
+    fresh = _build_bp_payload(
+        datetime.now(timezone.utc), systolic=120, diastolic=80, pulse=72
+    )
+    mock_client = _make_mock_connected_client(mocker, garbage, fresh)
+    mocker.patch("bleak.BleakClient", return_value=mock_client)
+
+    log = _CapturingLogger()
+    sensor = OmronBpSensor(bus, db_session)
+    sensor._logger = log
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+
+    assert reading is not None
+    parse_failed = [e for e in log.events if e[1] == "omron_bp.parse_failed"]
+    assert len(parse_failed) == 1
 
 
 # Verifies _publish_reading emits exactly three MeasurementProposed
@@ -535,21 +689,93 @@ async def test_omron_bp_publish_reading_emits_three_events_when_pulse_present(
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_connected_client(mocker: Any, payload: bytes) -> Any:
+def _make_mock_connected_client(mocker: Any, *payloads: bytes) -> Any:
     """Build a mock that mimics a bleak.BleakClient instance.
 
-    Crucially, ``start_notify`` invokes its callback synchronously
-    so the ``received`` future inside _read_one_notification resolves
-    before ``asyncio.wait_for`` is awaited — otherwise the test would
-    block on the 120 s wait.
+    ``start_notify`` invokes its callback synchronously for each
+    payload in order, so by the time the drain loop awaits
+    ``queue.get()``, every payload is already enqueued. This
+    keeps tests fast (no real BLE timing) while exercising the
+    multi-notification drain path that the 2026-05-06 fix added.
     """
     client = mocker.MagicMock(name="ConnectedBleakClient")
 
     async def fake_start_notify(_uuid: str, callback: Any) -> None:
-        callback(None, bytearray(payload))
+        for payload in payloads:
+            callback(None, bytearray(payload))
 
     client.connect = mocker.AsyncMock()
     client.start_notify = mocker.AsyncMock(side_effect=fake_start_notify)
     client.stop_notify = mocker.AsyncMock()
     client.disconnect = mocker.AsyncMock()
     return client
+
+
+def _build_bp_payload(
+    taken_at: datetime,
+    *,
+    systolic: int = 120,
+    diastolic: int = 80,
+    pulse: int = 72,
+) -> bytes:
+    """Construct a SIG Blood Pressure Measurement payload with a timestamp.
+
+    Mirrors the bench-validated layout (flags 0x06 = timestamp +
+    pulse-rate present). Integer args go in as the SFLOAT-16
+    mantissa with exponent 0, which matches how the cuff actually
+    encodes whole-number mmHg / bpm readings.
+    """
+    return bytes(
+        [
+            0x06,
+            systolic & 0xFF,
+            (systolic >> 8) & 0xFF,
+            diastolic & 0xFF,
+            (diastolic >> 8) & 0xFF,
+            93 & 0xFF,
+            (93 >> 8) & 0xFF,
+            taken_at.year & 0xFF,
+            (taken_at.year >> 8) & 0xFF,
+            taken_at.month,
+            taken_at.day,
+            taken_at.hour,
+            taken_at.minute,
+            taken_at.second,
+            pulse & 0xFF,
+            (pulse >> 8) & 0xFF,
+        ]
+    )
+
+
+def _fresh_bp_payload(**kwargs: Any) -> bytes:
+    """Build a payload stamped 'now' so it passes the freshness gate."""
+    return _build_bp_payload(datetime.now(timezone.utc), **kwargs)
+
+
+class _CapturingLogger:
+    """Records structlog-style log calls into a list for assertion.
+
+    The OmronBpSensor instantiates its own logger via
+    ``structlog.get_logger``; tests overwrite ``sensor._logger``
+    with this in-memory recorder so they can assert on event
+    names and structured fields without coupling to structlog's
+    output renderer.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict[str, Any]]] = []
+
+    def _record(self, level: str, event: str, **kwargs: Any) -> None:
+        self.events.append((level, event, kwargs))
+
+    def info(self, event: str, **kwargs: Any) -> None:
+        self._record("info", event, **kwargs)
+
+    def warning(self, event: str, **kwargs: Any) -> None:
+        self._record("warning", event, **kwargs)
+
+    def error(self, event: str, **kwargs: Any) -> None:
+        self._record("error", event, **kwargs)
+
+    def debug(self, event: str, **kwargs: Any) -> None:
+        self._record("debug", event, **kwargs)

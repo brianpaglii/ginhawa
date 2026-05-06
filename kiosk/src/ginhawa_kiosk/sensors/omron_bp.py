@@ -44,6 +44,7 @@ The kiosk's GUI flow (Phase 2 Prompt 8) must reflect this:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -87,6 +88,16 @@ _BP_CONNECT_RETRY_DELAY_S = 2.0
 # prompted (via the GUI's re-enabled Connect button) to take a
 # fresh measurement and tap Connect again.
 _BP_FRESHNESS_WINDOW_S = 180.0  # 3 minutes
+
+# Outer wall-clock budget for the drain-and-wait phase, measured
+# from the moment notifications start flowing. The cuff dumps any
+# stored readings within a few seconds of the indicate subscription
+# (store-and-forward), so this only needs to span "drain stale
+# readings + give the user a beat to press START on the cuff again
+# if the kiosk's prompt is what reminded them". 90 s comfortably
+# covers both phases without leaving the citizen staring at a
+# spinner forever when the cuff has nothing fresh to deliver.
+_BP_FRESH_READ_TIMEOUT_S = 90.0
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +347,6 @@ class OmronBpSensor(Sensor):
         client_factory: Callable[[str], Any] | None = None,
         ble_lock: BleAdapterLock | None = None,
     ) -> None:
-        import asyncio
-
         self._bus = bus
         self._db = db
         self._logger = structlog.get_logger("sensor.omron_bp")
@@ -418,45 +427,47 @@ class OmronBpSensor(Sensor):
             try:
                 if self._ble_lock is not None:
                     async with self._ble_lock.exclusive():
-                        payload = await self._read_one_notification(self._mac)
+                        reading = await self._read_notifications_until_fresh(self._mac)
                 else:
-                    payload = await self._read_one_notification(self._mac)
+                    reading = await self._read_notifications_until_fresh(self._mac)
             except Exception as exc:
                 self._logger.warning(
                     "omron_bp.connect_failed", mac=self._mac, error=str(exc)
                 )
                 return
-            try:
-                reading = parse_bp_measurement(payload)
-            except ValueError as exc:
-                self._logger.warning(
-                    "omron_bp.parse_failed", error=str(exc), bytes=payload.hex()
-                )
+            if reading is None:
+                # Outer drain timeout already logged with stale_count.
                 return
-            # Freshness gate. The cuff's store-and-forward model means
-            # the indicate we just received may be a measurement taken
-            # hours ago and never retrieved. Drop it on the floor and
-            # let the citizen take a fresh BP, then re-tap Connect.
-            if not _is_fresh(reading.taken_at):
-                self._logger.warning(
-                    "omron_bp.stale_reading_dropped",
-                    mac=self._mac,
-                    taken_at=reading.taken_at.isoformat() if reading.taken_at else None,
-                    freshness_window_s=_BP_FRESHNESS_WINDOW_S,
-                )
-                return
-            self._logger.info(
-                "omron_bp.measurement_received",
-                mac=self._mac,
-                has_pulse=reading.pulse_bpm is not None,
-                taken_at=reading.taken_at.isoformat() if reading.taken_at else None,
-            )
             await self._publish_reading(reading)
 
-    async def _read_one_notification(self, mac: str) -> bytes:
-        """Connect, subscribe, await one notification, return payload.
+    async def _read_notifications_until_fresh(self, mac: str) -> BpReading | None:
+        """Connect, subscribe, drain stored readings until a fresh one arrives.
 
-        Two construction paths:
+        The HEM-7155T uses a store-and-forward BLE model: on connect
+        it dumps every measurement it has buffered (typically just
+        the most recent, but possibly several) via SIG indicate.
+        Older firmware revisions, and post-battery-pull state,
+        dump multiple. The 2026-05-06 bench surfaced this: the
+        first indicate after ``start_notify`` was a 5-hour-old
+        stored reading; the freshly-pressed measurement would have
+        followed it but the kiosk had already disconnected.
+
+        Behaviour:
+
+        * Each notification is parsed; parse failures are logged and
+          skipped (we keep draining — a malformed indicate doesn't
+          mean the next one is also bad).
+        * Stale readings (timestamp older than
+          ``_BP_FRESHNESS_WINDOW_S``, or no timestamp at all) are
+          logged as ``omron_bp.stored_reading_drained`` and skipped.
+        * The first reading inside the freshness window is logged
+          as ``omron_bp.measurement_received`` and returned.
+        * The whole drain phase is bounded by
+          ``_BP_FRESH_READ_TIMEOUT_S``; on timeout we log
+          ``omron_bp.fresh_reading_timeout`` (with how many stale
+          readings were drained) and return ``None``.
+
+        Two construction paths for the underlying client:
 
         * Test path (``self._client_factory`` is set): the factory
           returns an async context manager; we use ``async with`` to
@@ -473,23 +484,21 @@ class OmronBpSensor(Sensor):
           starting to broadcast. After the final retry exhausts, we
           surface a clear error pointing at pairing mode.
           ``client.disconnect()`` is in a ``finally`` block so we
-          always release the BLE handle even on notify timeout.
+          always release the BLE handle even on drain timeout.
         """
-        import asyncio
-
-        received: asyncio.Future[bytes] = asyncio.get_event_loop().create_future()
+        queue: asyncio.Queue[bytes] = asyncio.Queue()
 
         def callback(_char: Any, data: bytearray) -> None:
-            if not received.done():
-                received.set_result(bytes(data))
+            queue.put_nowait(bytes(data))
 
         if self._client_factory is not None:
             client_cm = self._client_factory(mac)
             async with client_cm as client:
                 await client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
-                payload = await asyncio.wait_for(received, timeout=120.0)
-                await client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
-            return payload
+                try:
+                    return await self._drain_until_fresh(queue, mac)
+                finally:
+                    await client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
 
         from bleak import BleakClient
         from bleak.exc import BleakError
@@ -539,11 +548,73 @@ class OmronBpSensor(Sensor):
 
         try:
             await connected_client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
-            payload = await asyncio.wait_for(received, timeout=120.0)
-            await connected_client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
+            return await self._drain_until_fresh(queue, mac)
         finally:
+            try:
+                await connected_client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
+            except Exception:
+                pass
             await connected_client.disconnect()
-        return payload
+
+    async def _drain_until_fresh(
+        self, queue: asyncio.Queue[bytes], mac: str
+    ) -> BpReading | None:
+        """Consume notifications until a fresh reading or the outer timeout.
+
+        Held inside the BLE-adapter lock for the full drain
+        duration (the caller establishes the lock); the queue is
+        fed by the notify callback. Returns the first fresh
+        :class:`BpReading` or ``None`` on timeout.
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + _BP_FRESH_READ_TIMEOUT_S
+        stale_count = 0
+
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                self._logger.warning(
+                    "omron_bp.fresh_reading_timeout",
+                    mac=mac,
+                    stale_count=stale_count,
+                    timeout_s=_BP_FRESH_READ_TIMEOUT_S,
+                )
+                return None
+            try:
+                payload = await asyncio.wait_for(queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                self._logger.warning(
+                    "omron_bp.fresh_reading_timeout",
+                    mac=mac,
+                    stale_count=stale_count,
+                    timeout_s=_BP_FRESH_READ_TIMEOUT_S,
+                )
+                return None
+            try:
+                reading = parse_bp_measurement(payload)
+            except ValueError as exc:
+                self._logger.warning(
+                    "omron_bp.parse_failed",
+                    error=str(exc),
+                    bytes=payload.hex(),
+                )
+                continue
+            if not _is_fresh(reading.taken_at):
+                stale_count += 1
+                self._logger.info(
+                    "omron_bp.stored_reading_drained",
+                    mac=mac,
+                    taken_at=reading.taken_at.isoformat() if reading.taken_at else None,
+                    freshness_window_s=_BP_FRESHNESS_WINDOW_S,
+                )
+                continue
+            self._logger.info(
+                "omron_bp.measurement_received",
+                mac=mac,
+                has_pulse=reading.pulse_bpm is not None,
+                taken_at=reading.taken_at.isoformat() if reading.taken_at else None,
+            )
+            return reading
 
     async def _publish_reading(self, reading: BpReading) -> None:
         await self._bus.publish(
