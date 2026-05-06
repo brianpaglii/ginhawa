@@ -23,17 +23,21 @@ Decisions pinned by code:
 * **Mass-only filter:** advertisements without a ``mass`` entity are
   ignored. Xiaomi advertises signal-strength-only frames between
   measurements; those are not a reading.
-* **Deduplication:** the scale rebroadcasts the same measurement
-  multiple times for reception reliability. We publish a new
-  :class:`MeasurementProposed` event only when the value differs by
-  ≥0.1 kg from the last published value, OR ≥5 seconds have elapsed
-  since the last publish.
+* **One reading per session:** the S200 broadcasts mass roughly
+  every 5 s while a user stands on it, and the kiosk's mental model
+  is per-session-one-weight. The :class:`_WeightStabilityGate`
+  buffers the last K readings and publishes the median only after
+  the buffer is "stable" (max - min ≤ tolerance). Once published,
+  the gate locks itself; further advertisements are dropped on the
+  floor until a :class:`SessionResetForSensors` event releases it.
 """
 
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections import deque
+from collections.abc import Mapping
+from statistics import median
 from typing import Any
 
 import structlog
@@ -41,55 +45,77 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db.models import DeviceConfig
-from ..fsm.event_bus import EventBus, MeasurementProposed
+from ..fsm.event_bus import EventBus, MeasurementProposed, SessionResetForSensors
 from .base import Sensor, SensorUnavailable
 from .ble_lock import BleAdapterLock
 
 
 _BINDKEY_CONFIG_KEY = "xiaomi_scale_bindkey"
-_VALUE_DEDUP_THRESHOLD_KG = 0.1
-_TIME_DEDUP_THRESHOLD_S = 5.0
 _SOURCE_DEVICE = "xiaomi_s200_ble"
 
+# Stability gate tunables. The scale broadcasts every ~5 s while a
+# person stands on it; with K=3 readings, that's ~15 s of dwell
+# before the kiosk captures the weight, well within the user's
+# expected "stand on the scale" window. Tolerance of 0.2 kg covers
+# the small fluctuations the scale itself reports as the user
+# settles, while still rejecting genuine shifts (e.g., a child
+# stepping off and on, or two people sharing the scale).
+_WEIGHT_STABILITY_BUFFER_K = 3
+_WEIGHT_STABILITY_TOLERANCE_KG = 0.2
+
 
 # ---------------------------------------------------------------------------
-# Dedup helper — shared by mock and real
+# Stability gate — shared by mock and real
 # ---------------------------------------------------------------------------
 
 
-class _Dedup:
-    """Decides whether to publish a new reading.
+class _WeightStabilityGate:
+    """Captures one stable weight per session.
 
-    First reading always passes. Subsequent readings pass when the
-    value differs by ≥``value_threshold`` OR ≥``time_threshold``
-    seconds have elapsed since the last publish.
+    The gate buffers the last ``K`` readings in a deque. It returns
+    a publishable value (the median of the buffer) only when:
+
+    * the buffer is full (``K`` readings have been seen), AND
+    * the spread is within ``tolerance_kg`` (``max - min``), AND
+    * the gate is not locked.
+
+    On a successful publish, the gate locks itself; subsequent
+    :meth:`accept` calls return ``None`` until :meth:`unlock` clears
+    the lock and the buffer. ``unlock`` is idempotent and is the
+    main_window's hook for "new session starting" / "session ended".
     """
 
     def __init__(
         self,
         *,
-        value_threshold: float = _VALUE_DEDUP_THRESHOLD_KG,
-        time_threshold: float = _TIME_DEDUP_THRESHOLD_S,
-        clock: Callable[[], float] | None = None,
+        buffer_k: int = _WEIGHT_STABILITY_BUFFER_K,
+        tolerance_kg: float = _WEIGHT_STABILITY_TOLERANCE_KG,
     ) -> None:
-        self._value_threshold = value_threshold
-        self._time_threshold = time_threshold
-        self._clock = clock or time.monotonic
-        self._last_value: float | None = None
-        self._last_ts: float | None = None
+        self._k = buffer_k
+        self._tolerance = tolerance_kg
+        self._buffer: deque[float] = deque(maxlen=buffer_k)
+        self._locked = False
 
-    def should_publish(self, value: float) -> bool:
-        if self._last_value is None or self._last_ts is None:
-            return True
-        if abs(value - self._last_value) >= self._value_threshold:
-            return True
-        if (self._clock() - self._last_ts) >= self._time_threshold:
-            return True
-        return False
+    def accept(self, value: float) -> float | None:
+        """Feed one reading; return the publish value if stable, else None."""
+        if self._locked:
+            return None
+        self._buffer.append(value)
+        if len(self._buffer) < self._k:
+            return None
+        if max(self._buffer) - min(self._buffer) > self._tolerance:
+            return None
+        published = float(median(self._buffer))
+        self._locked = True
+        return published
 
-    def mark_published(self, value: float) -> None:
-        self._last_value = value
-        self._last_ts = self._clock()
+    def unlock(self) -> None:
+        """Release the lock and clear the buffer for a fresh session."""
+        self._locked = False
+        self._buffer.clear()
+
+    def is_locked(self) -> bool:
+        return self._locked
 
 
 # ---------------------------------------------------------------------------
@@ -128,14 +154,9 @@ def extract_mass_kg(entity_values: Mapping[Any, Any]) -> float | None:
 class MockXiaomiScale(Sensor):
     """In-memory scale. Tests / dev call :meth:`simulate_weight`."""
 
-    def __init__(
-        self,
-        bus: EventBus,
-        *,
-        clock: Callable[[], float] | None = None,
-    ) -> None:
+    def __init__(self, bus: EventBus) -> None:
         self._bus = bus
-        self._dedup = _Dedup(clock=clock)
+        self._gate = _WeightStabilityGate()
         self._running = False
 
     async def start(self) -> None:
@@ -148,19 +169,23 @@ class MockXiaomiScale(Sensor):
     def is_running(self) -> bool:
         return self._running
 
+    def reset_for_new_session(self) -> None:
+        """Release the stability gate so a new session can capture a weight."""
+        self._gate.unlock()
+
     async def simulate_weight(self, kg: float) -> None:
-        if not self._dedup.should_publish(kg):
+        published = self._gate.accept(kg)
+        if published is None:
             return
         await self._bus.publish(
             MeasurementProposed(
                 measurement_type="weight",
-                value=kg,
+                value=published,
                 unit="kg",
                 source_device=_SOURCE_DEVICE,
                 claimed_is_valid=True,
             )
         )
-        self._dedup.mark_published(kg)
 
 
 # ---------------------------------------------------------------------------
@@ -189,13 +214,12 @@ class XiaomiScaleSensor(Sensor):
         bus: EventBus,
         db: Session,
         *,
-        clock: Callable[[], float] | None = None,
         ble_lock: BleAdapterLock | None = None,
     ) -> None:
         self._bus = bus
         self._db = db
         self._logger = structlog.get_logger("sensor.xiaomi_scale")
-        self._dedup = _Dedup(clock=clock)
+        self._gate = _WeightStabilityGate()
         self._device_data: Any | None = None
         self._scanner: Any | None = None
         self._running = False
@@ -223,6 +247,11 @@ class XiaomiScaleSensor(Sensor):
                 f"{_BINDKEY_CONFIG_KEY} in device_config is not valid hex"
             ) from exc
 
+        # Subscribe to the session-reset event so the gate releases at
+        # the end of a session (or the start of the next one).
+        # main_window publishes this on entering IDLE / LANGUAGE_SELECT.
+        self._bus.subscribe(SessionResetForSensors, self._on_session_reset)
+
         # Below: bleak + xiaomi-ble engagement. Hardware-bound; tests
         # exercise the post-decode pipeline (_on_sensor_update) directly.
         from xiaomi_ble import (  # pragma: no cover
@@ -239,6 +268,19 @@ class XiaomiScaleSensor(Sensor):
             self._ble_lock.register_scanner(
                 pause=self._pause_scanner, resume=self._resume_scanner
             )
+
+    def reset_for_new_session(self) -> None:
+        """Release the stability gate so a new session can capture a weight.
+
+        Direct call surface for callers that hold a sensor reference;
+        the bus-driven path (:meth:`_on_session_reset`) is what the
+        main_window uses in production.
+        """
+        self._gate.unlock()
+        self._logger.info("xiaomi_scale.gate_unlocked")
+
+    async def _on_session_reset(self, _event: SessionResetForSensors) -> None:
+        self.reset_for_new_session()
 
     async def stop(self) -> None:  # pragma: no cover - hardware path
         if self._ble_lock is not None:
@@ -336,15 +378,15 @@ class XiaomiScaleSensor(Sensor):
         kg = extract_mass_kg(entity_values)
         if kg is None:
             return  # signal-strength-only or other non-mass advertisement
-        if not self._dedup.should_publish(kg):
+        published = self._gate.accept(kg)
+        if published is None:
             return
         await self._bus.publish(
             MeasurementProposed(
                 measurement_type="weight",
-                value=kg,
+                value=published,
                 unit="kg",
                 source_device=_SOURCE_DEVICE,
                 claimed_is_valid=True,
             )
         )
-        self._dedup.mark_published(kg)

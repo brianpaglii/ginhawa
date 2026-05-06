@@ -28,6 +28,7 @@ from .event_bus import (
     PrintComplete,
     PrintRequested,
     RfidScanned,
+    SessionResetForSensors,
     TimeoutFired,
 )
 from .session_fsm import (
@@ -59,6 +60,7 @@ __all__ = [
     "PrintRequested",
     "RfidScanned",
     "SessionFSM",
+    "SessionResetForSensors",
     "State",
     "TimeoutFired",
 ]

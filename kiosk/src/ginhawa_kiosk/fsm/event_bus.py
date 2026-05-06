@@ -139,6 +139,20 @@ class BpMeasurementRequested(Event):
     events for systolic / diastolic / pulse, then disconnects."""
 
 
+class SessionResetForSensors(Event):
+    """Signal that a session has ended (or a new one is starting).
+
+    Sensors that maintain per-session state (e.g., the Xiaomi
+    scale's stability + lock gate, which captures one weight per
+    session and then suppresses further readings) subscribe to
+    this event and clear that state on receipt. The main window
+    publishes it on state transitions into ``IDLE`` and
+    ``LANGUAGE_SELECT`` — IDLE covers normal end / aborted /
+    error returns, LANGUAGE_SELECT covers a fresh session start
+    immediately after RFID identification.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Bus
 # ---------------------------------------------------------------------------

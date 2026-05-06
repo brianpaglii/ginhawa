@@ -43,6 +43,7 @@ from ..fsm import (
     MeasurementProposed,
     RfidScanned,
     SessionFSM,
+    SessionResetForSensors,
     State,
 )
 from ..services.audit import record_audit
@@ -303,6 +304,19 @@ class KioskMainWindow(QMainWindow):
         self._captured_types.clear()
         self._configure_state_specific(state, snapshot, active_language)
         self._configure_state_timeout(state)
+        self._maybe_publish_session_reset(state)
+
+    def _maybe_publish_session_reset(self, state: str) -> None:
+        # Tell session-scoped sensors (e.g., the Xiaomi scale's
+        # stability+lock gate) to release their per-session state.
+        # IDLE covers normal end / aborted / error returns; the
+        # following LANGUAGE_SELECT for a brand-new session also
+        # publishes (idempotent — the gate's unlock is a no-op when
+        # already unlocked) so the kiosk doesn't depend on which
+        # state the previous session left from.
+        if state not in (State.IDLE, State.LANGUAGE_SELECT):
+            return
+        asyncio.create_task(self._bus.publish(SessionResetForSensors()))
 
     def _configure_state_specific(
         self, state: str, snapshot: FsmSnapshot, language: Language
