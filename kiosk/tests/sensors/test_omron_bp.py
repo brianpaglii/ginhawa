@@ -224,6 +224,50 @@ def test_is_fresh_accepts_recent_rejects_old_and_unstamped() -> None:
     assert _is_fresh(now_fixed + timedelta(seconds=30), now=now) is True
 
 
+# Verifies the freshness gate accepts a reading whose timestamp is in
+# the future, as long as the skew is within the freshness window.
+# Real-world reason: the HEM-7155T tags BLE timestamps "+00:00" but
+# encodes its local wall-clock time, so a Pi running UTC in a UTC+N
+# deployment sees the cuff's "now" as N hours in the future. The
+# 2026-05-06 19:14 bench captured exactly this — 14 readings, all
+# future-dated, all dropped pre-fix. Mortality: would fail if the
+# gate reverted to a one-sided "must be in the past" check.
+def test_is_fresh_future_within_window() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from ginhawa_kiosk.sensors.omron_bp import _is_fresh
+
+    now_fixed = datetime(2026, 5, 6, 18, 30, 0, tzinfo=timezone.utc)
+
+    def now() -> datetime:
+        return now_fixed
+
+    # 60 s in the future — well inside the 180 s window.
+    assert _is_fresh(now_fixed + timedelta(seconds=60), now=now) is True
+
+
+# Verifies the symmetric tolerance still has a ceiling: a reading
+# stamped 10 minutes in the future is rejected as stale, the same
+# way a 10-minute-old reading would be. Pins the upper bound so a
+# UTC+8 cuff (8 h ahead) or any other gross skew can't smuggle a
+# stale stored reading past the freshness gate.
+# Mortality: would fail if the symmetric tolerance grew unbounded
+# (e.g., someone replaced the abs check with "always accept future
+# readings").
+def test_is_fresh_future_beyond_window() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from ginhawa_kiosk.sensors.omron_bp import _is_fresh
+
+    now_fixed = datetime(2026, 5, 6, 18, 30, 0, tzinfo=timezone.utc)
+
+    def now() -> datetime:
+        return now_fixed
+
+    # 600 s in the future — well outside the 180 s window.
+    assert _is_fresh(now_fixed + timedelta(seconds=600), now=now) is False
+
+
 # Verifies the parser raises a clear error on a payload that's
 # shorter than the 7-byte minimum (flags + 3 SFLOAT-16 fields).
 def test_omron_bp_parser_rejects_truncated_payload() -> None:

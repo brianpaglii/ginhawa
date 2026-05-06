@@ -190,9 +190,19 @@ def _is_fresh(
     all — without it we can't distinguish a fresh measurement from
     a months-old stored one, and the kiosk would rather drop the
     reading than misattribute someone else's BP to the active
-    citizen. Returns ``True`` for any reading taken within
-    ``window_s`` of "now" in either direction (clock skew between
-    the cuff and the Pi is bounded; we tolerate either side).
+    citizen.
+
+    Otherwise returns ``True`` iff
+    ``abs(now - taken_at) <= window_s``. The check is intentionally
+    symmetric: the HEM-7155T tags every BLE timestamp ``+00:00``
+    but encodes its local wall-clock time in the bytes, so a Pi
+    running UTC in a UTC+8 deployment sees the cuff's "now" as
+    ~8 h in the future. We can't detect or correct the offset at
+    this layer (different deployments, different cuffs, possibly
+    different skew per device), so we accept skew up to the
+    freshness window in either direction. Anything outside the
+    window — past or future — is treated as a stale stored reading
+    and dropped.
 
     ``now`` is injectable for tests; defaults to UTC wall-clock.
     """
