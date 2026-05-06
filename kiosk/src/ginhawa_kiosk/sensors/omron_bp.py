@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -74,6 +75,19 @@ _SOURCE_DEVICE = "omron_hem7155t"
 _BP_CONNECT_RETRIES = 5
 _BP_CONNECT_RETRY_DELAY_S = 2.0
 
+# Freshness window for stored measurements. The HEM-7155T's
+# store-and-forward BLE model means a citizen who taps "Connect to
+# cuff" without first taking a fresh BP will retrieve whatever the
+# cuff stored last — possibly hours old, possibly belonging to a
+# different citizen if the kiosk is shared. The 2026-05-06 bench
+# proved this: connecting in pairing mode without re-pressing START
+# returned a measurement timestamped 5 hours earlier verbatim. Any
+# reading whose embedded timestamp is older than this window is
+# treated as stale and dropped on the floor; the citizen is
+# prompted (via the GUI's re-enabled Connect button) to take a
+# fresh measurement and tap Connect again.
+_BP_FRESHNESS_WINDOW_S = 180.0  # 3 minutes
+
 
 # ---------------------------------------------------------------------------
 # SFLOAT-16 + payload parsing — pure logic, fully testable
@@ -88,6 +102,13 @@ class BpReading:
     diastolic_mmhg: float
     map_mmhg: float
     pulse_bpm: float | None  # None when the cuff didn't report pulse
+    # Timestamp embedded in the SIG payload (bytes 7-13). The cuff
+    # uses local-clock time without a timezone marker; we attach UTC
+    # because that's what the cuff's clock IS configured to in
+    # production (set during commissioning). None when the cuff
+    # didn't include a timestamp — older firmware revisions or
+    # non-Omron BP devices that share the SIG profile may omit it.
+    taken_at: datetime | None
 
 
 def parse_sfloat16(byte0: int, byte1: int) -> float:
@@ -124,7 +145,11 @@ def parse_bp_measurement(payload: bytes) -> BpReading:
     mean_arterial = parse_sfloat16(payload[5], payload[6])
 
     offset = 7
-    if flags & 0x02:  # time-stamp present (year MSB-LSB then 5 bytes)
+    taken_at: datetime | None = None
+    if flags & 0x02:  # time-stamp present (year LSB-MSB then 5 bytes)
+        if len(payload) < offset + 7:
+            raise ValueError("BP payload claims timestamp but is truncated")
+        taken_at = _parse_timestamp(payload[offset : offset + 7])
         offset += 7
 
     pulse: float | None = None
@@ -138,7 +163,57 @@ def parse_bp_measurement(payload: bytes) -> BpReading:
         diastolic_mmhg=diastolic,
         map_mmhg=mean_arterial,
         pulse_bpm=pulse,
+        taken_at=taken_at,
     )
+
+
+def _is_fresh(
+    taken_at: datetime | None,
+    *,
+    now: Callable[[], datetime] | None = None,
+    window_s: float = _BP_FRESHNESS_WINDOW_S,
+) -> bool:
+    """Decide whether a SIG-payload timestamp is recent enough to publish.
+
+    Returns ``False`` when the cuff didn't include a timestamp at
+    all — without it we can't distinguish a fresh measurement from
+    a months-old stored one, and the kiosk would rather drop the
+    reading than misattribute someone else's BP to the active
+    citizen. Returns ``True`` for any reading taken within
+    ``window_s`` of "now" in either direction (clock skew between
+    the cuff and the Pi is bounded; we tolerate either side).
+
+    ``now`` is injectable for tests; defaults to UTC wall-clock.
+    """
+    if taken_at is None:
+        return False
+    current = (now or (lambda: datetime.now(timezone.utc)))()
+    if taken_at.tzinfo is None:
+        taken_at = taken_at.replace(tzinfo=timezone.utc)
+    delta_s = abs((current - taken_at).total_seconds())
+    return delta_s <= window_s
+
+
+def _parse_timestamp(raw: bytes) -> datetime | None:
+    """Decode the SIG Date Time field (7 bytes, year LSB-MSB then m/d/h/m/s).
+
+    Returns ``None`` if the cuff sent an obviously bogus timestamp
+    (year 0, out-of-range month/day/etc) — keeps a malformed clock
+    from crashing the BP path. Out-of-range readings are caught by
+    ``datetime``'s own constructor; we map ValueError to None.
+    """
+    year = raw[0] | (raw[1] << 8)
+    month = raw[2]
+    day = raw[3]
+    hour = raw[4]
+    minute = raw[5]
+    second = raw[6]
+    if year == 0:
+        return None
+    try:
+        return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -164,14 +239,24 @@ class MockOmronBp(Sensor):
         return self._running
 
     async def simulate_measurement(
-        self, systolic: float, diastolic: float, pulse: float | None = None
+        self,
+        systolic: float,
+        diastolic: float,
+        pulse: float | None = None,
+        taken_at: datetime | None = None,
     ) -> None:
+        # Mock readings default to "now" so the freshness gate never
+        # rejects them in dev/laptop mode. Tests that need to exercise
+        # the stale-reading branch pass an explicit taken_at.
+        if taken_at is None:
+            taken_at = datetime.now(timezone.utc)
         await self._publish_reading(
             BpReading(
                 systolic_mmhg=systolic,
                 diastolic_mmhg=diastolic,
                 map_mmhg=(systolic + 2 * diastolic) / 3,
                 pulse_bpm=pulse,
+                taken_at=taken_at,
             )
         )
 
@@ -348,10 +433,23 @@ class OmronBpSensor(Sensor):
                     "omron_bp.parse_failed", error=str(exc), bytes=payload.hex()
                 )
                 return
+            # Freshness gate. The cuff's store-and-forward model means
+            # the indicate we just received may be a measurement taken
+            # hours ago and never retrieved. Drop it on the floor and
+            # let the citizen take a fresh BP, then re-tap Connect.
+            if not _is_fresh(reading.taken_at):
+                self._logger.warning(
+                    "omron_bp.stale_reading_dropped",
+                    mac=self._mac,
+                    taken_at=reading.taken_at.isoformat() if reading.taken_at else None,
+                    freshness_window_s=_BP_FRESHNESS_WINDOW_S,
+                )
+                return
             self._logger.info(
                 "omron_bp.measurement_received",
                 mac=self._mac,
                 has_pulse=reading.pulse_bpm is not None,
+                taken_at=reading.taken_at.isoformat() if reading.taken_at else None,
             )
             await self._publish_reading(reading)
 

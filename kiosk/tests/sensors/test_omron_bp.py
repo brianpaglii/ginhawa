@@ -58,9 +58,17 @@ def test_omron_bp_parses_sig_blood_pressure_measurement() -> None:
     assert reading.pulse_bpm == pytest.approx(72.0)
 
 
-# Verifies the parser correctly skips a 7-byte time-stamp field when
-# flags bit 1 is set, then reads pulse from the right offset.
-def test_omron_bp_parser_skips_optional_timestamp() -> None:
+# Verifies the parser correctly extracts the 7-byte SIG Date Time
+# field when flags bit 1 is set, AND reads pulse from the offset
+# after the timestamp. The bench Pi cuff stamps every measurement
+# this way; the parser must surface the timestamp so the kiosk can
+# tell a fresh reading from a stored historical one.
+# Mortality: would fail if the timestamp parser dropped bytes,
+# byte-swapped the year, or misaligned the post-timestamp pulse
+# offset.
+def test_omron_bp_parser_extracts_optional_timestamp() -> None:
+    from datetime import datetime, timezone
+
     payload = bytes(
         [
             0x06,  # flags: time-stamp + pulse-rate present
@@ -83,6 +91,136 @@ def test_omron_bp_parser_skips_optional_timestamp() -> None:
     )
     reading = parse_bp_measurement(payload)
     assert reading.pulse_bpm == pytest.approx(75.0)
+    assert reading.taken_at == datetime(2024, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+
+
+# Verifies the exact payload the bench Pi's cuff returned on
+# 2026-05-06 — proves the parser handles real-world data, not just
+# synthetic. Timestamp 2026-05-06 13:25:22 UTC, pulse 104, systolic
+# 130, diastolic 71. Mortality: would fail if any decoder drift
+# corrupted the bench-validated payload.
+def test_omron_bp_parser_decodes_bench_pi_payload() -> None:
+    from datetime import datetime, timezone
+
+    payload = bytes(
+        [
+            0x1E,  # flags: timestamp + pulse + user-id + status
+            0x82,
+            0x00,  # systolic 130
+            0x47,
+            0x00,  # diastolic 71
+            0x5A,
+            0x00,  # MAP 90
+            0xEA,
+            0x07,  # year 2026
+            0x05,
+            0x06,
+            0x0D,
+            0x19,
+            0x16,  # 2026-05-06 13:25:22
+            0x68,
+            0x00,  # pulse 104
+            0x01,  # user 1
+            0x00,
+            0x00,  # status 0
+        ]
+    )
+    reading = parse_bp_measurement(payload)
+    assert reading.systolic_mmhg == pytest.approx(130.0)
+    assert reading.diastolic_mmhg == pytest.approx(71.0)
+    assert reading.pulse_bpm == pytest.approx(104.0)
+    assert reading.taken_at == datetime(2026, 5, 6, 13, 25, 22, tzinfo=timezone.utc)
+
+
+# Verifies the timestamp parser returns None when the cuff sends a
+# year=0 payload. Some firmwares emit this after a battery pull
+# clears the RTC; we'd rather drop the reading than misattribute
+# it.
+def test_omron_bp_parser_rejects_year_zero_timestamp() -> None:
+    payload = bytes(
+        [
+            0x06,  # flags: time-stamp + pulse-rate present
+            0x78,
+            0x00,
+            0x50,
+            0x00,
+            0x5D,
+            0x00,
+            0x00,
+            0x00,  # year = 0
+            0x05,
+            0x02,
+            0x0E,
+            0x1E,
+            0x00,
+            0x4B,
+            0x00,
+        ]
+    )
+    reading = parse_bp_measurement(payload)
+    assert reading.taken_at is None
+    # Pulse should still parse correctly past the bogus timestamp.
+    assert reading.pulse_bpm == pytest.approx(75.0)
+
+
+# Verifies a payload that claims a timestamp but is too short to
+# contain one raises rather than silently producing garbage.
+def test_omron_bp_parser_rejects_truncated_timestamp() -> None:
+    payload = bytes(
+        [
+            0x02,  # flags: time-stamp present
+            0x78,
+            0x00,
+            0x50,
+            0x00,
+            0x5D,
+            0x00,
+            # Only one byte of the 7-byte timestamp — truncated.
+            0xE8,
+        ]
+    )
+    with pytest.raises(ValueError, match="timestamp but is truncated"):
+        parse_bp_measurement(payload)
+
+
+# Verifies _is_fresh accepts readings within the freshness window
+# and rejects ones outside it. Rejects None timestamps too — without
+# a timestamp we can't distinguish a fresh measurement from a stored
+# one and prefer to drop the reading.
+# Mortality: would fail if the freshness gate accepted unstamped
+# readings — the exact regression the 2026-05-06 bench surfaced.
+def test_is_fresh_accepts_recent_rejects_old_and_unstamped() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from ginhawa_kiosk.sensors.omron_bp import _BP_FRESHNESS_WINDOW_S, _is_fresh
+
+    now_fixed = datetime(2026, 5, 6, 18, 30, 0, tzinfo=timezone.utc)
+
+    def now() -> datetime:
+        return now_fixed
+
+    # Just-taken reading.
+    assert _is_fresh(now_fixed, now=now) is True
+
+    # Within the window — 2 minutes ago.
+    assert _is_fresh(now_fixed - timedelta(seconds=120), now=now) is True
+
+    # Just outside the window — window + 1 second.
+    assert (
+        _is_fresh(now_fixed - timedelta(seconds=_BP_FRESHNESS_WINDOW_S + 1), now=now)
+        is False
+    )
+
+    # The bench's stale reading from 5 hours earlier — definitely stale.
+    assert _is_fresh(now_fixed - timedelta(hours=5), now=now) is False
+
+    # No timestamp at all → reject. The kiosk would rather miss a
+    # legitimate fresh reading than misattribute a stored old one.
+    assert _is_fresh(None, now=now) is False
+
+    # Forward clock skew is also tolerated up to the same window
+    # (the cuff's RTC may run a few seconds ahead of the Pi's).
+    assert _is_fresh(now_fixed + timedelta(seconds=30), now=now) is True
 
 
 # Verifies the parser raises a clear error on a payload that's
@@ -173,7 +311,13 @@ async def test_mock_omron_bp_omits_pulse_when_absent(
 # Verifies BpReading is the right shape — small sanity test for the
 # dataclass that downstream parsing depends on.
 def test_bp_reading_dataclass_carries_all_fields() -> None:
-    r = BpReading(systolic_mmhg=120, diastolic_mmhg=80, map_mmhg=93, pulse_bpm=72)
+    r = BpReading(
+        systolic_mmhg=120,
+        diastolic_mmhg=80,
+        map_mmhg=93,
+        pulse_bpm=72,
+        taken_at=None,
+    )
     assert r.systolic_mmhg == 120
     assert r.diastolic_mmhg == 80
     assert r.map_mmhg == 93
@@ -205,7 +349,13 @@ async def test_omron_bp_sensor_publish_reading(
     assert sensor.is_running is False
 
     await sensor._publish_reading(
-        BpReading(systolic_mmhg=120, diastolic_mmhg=80, map_mmhg=93, pulse_bpm=72)
+        BpReading(
+            systolic_mmhg=120,
+            diastolic_mmhg=80,
+            map_mmhg=93,
+            pulse_bpm=72,
+            taken_at=None,
+        )
     )
     types = [m.measurement_type for m in captured_measurements]
     assert types == ["systolic_bp", "diastolic_bp", "heart_rate"]
@@ -213,7 +363,13 @@ async def test_omron_bp_sensor_publish_reading(
     # Without pulse: only two events, no heart_rate.
     captured_measurements.clear()
     await sensor._publish_reading(
-        BpReading(systolic_mmhg=118, diastolic_mmhg=78, map_mmhg=91, pulse_bpm=None)
+        BpReading(
+            systolic_mmhg=118,
+            diastolic_mmhg=78,
+            map_mmhg=91,
+            pulse_bpm=None,
+            taken_at=None,
+        )
     )
     types = {m.measurement_type for m in captured_measurements}
     assert types == {"systolic_bp", "diastolic_bp"}
@@ -362,6 +518,7 @@ async def test_omron_bp_publish_reading_emits_three_events_when_pulse_present(
             diastolic_mmhg=82.0,
             map_mmhg=97.0,
             pulse_bpm=72.0,
+            taken_at=None,
         )
     )
 
