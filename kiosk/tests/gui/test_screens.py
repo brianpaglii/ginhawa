@@ -262,6 +262,81 @@ def test_change_language_button_visible_on_report(qtbot: QtBot) -> None:
     assert _has_visible_button(screen, "change_language_button")
 
 
+# Verifies the BP cuff connect button is present and emits the
+# connect_to_cuff_requested signal exactly once when tapped, and
+# that the button disables itself synchronously to prevent
+# double-publish on rapid taps. Mortality: 'Would fail if the
+# auto-fire-on-state-entry regression came back, defeating the
+# fix for the 2026-05-05 InProgress bug.'
+def test_measuring_vitals_connect_button_emits_signal_and_disables(
+    qtbot: QtBot,
+) -> None:
+    from ginhawa_kiosk.gui.screens import MeasuringVitalsScreen
+    from PyQt6.QtWidgets import QPushButton
+
+    screen = MeasuringVitalsScreen()
+    qtbot.addWidget(screen)
+    screen.show()
+    screen.on_enter("en")
+
+    received: list[None] = []
+    screen.connect_to_cuff_requested.connect(lambda: received.append(None))
+
+    button = screen.findChild(QPushButton, "measuring_vitals_connect_button")
+    assert button is not None
+    assert button.isEnabled()
+
+    qtbot.mouseClick(button, qt_left_button())
+
+    assert received == [None]
+    # Synchronous disable inside the on-click slot so a rapid second
+    # tap doesn't fire a second BpMeasurementRequested.
+    assert not button.isEnabled()
+
+
+# Verifies the connect button is re-enabled by set_connecting(False) —
+# the main window's re-enable timer path. Mortality: 'Would fail if
+# the citizen retry path were broken.'
+def test_measuring_vitals_set_connecting_toggles_button(qtbot: QtBot) -> None:
+    from ginhawa_kiosk.gui.screens import MeasuringVitalsScreen
+    from PyQt6.QtWidgets import QPushButton
+
+    screen = MeasuringVitalsScreen()
+    qtbot.addWidget(screen)
+    screen.show()
+    screen.on_enter("en")
+
+    button = screen.findChild(QPushButton, "measuring_vitals_connect_button")
+    assert button is not None and button.isEnabled()
+
+    screen.set_connecting(True)
+    assert not button.isEnabled()
+
+    screen.set_connecting(False)
+    assert button.isEnabled()
+
+
+# Verifies on_enter resets the button to enabled even after a previous
+# session left it disabled mid-flow (e.g., citizen aborted while the
+# button was still in "Connecting..." state).
+def test_measuring_vitals_on_enter_resets_button(qtbot: QtBot) -> None:
+    from ginhawa_kiosk.gui.screens import MeasuringVitalsScreen
+    from PyQt6.QtWidgets import QPushButton
+
+    screen = MeasuringVitalsScreen()
+    qtbot.addWidget(screen)
+    screen.show()
+
+    screen.on_enter("en")
+    screen.set_connecting(True)
+    button = screen.findChild(QPushButton, "measuring_vitals_connect_button")
+    assert button is not None and not button.isEnabled()
+
+    # Re-enter (e.g., new session) — button should be enabled again.
+    screen.on_enter("tl")
+    assert button.isEnabled()
+
+
 # Verifies a successful registration submission emits a
 # RegistrationData payload with the entered values, and that the
 # default barangay is pre-populated.

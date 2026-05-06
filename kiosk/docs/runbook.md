@@ -254,3 +254,54 @@ different unit.
 7. Record the working configuration in the "Tested deployments"
    table above, then commit the env values into the deployment's
    environment file so subsequent boots pick them up automatically.
+
+## Diagnosing BP cuff connection failures
+
+The Omron HEM-7155T uses a **store-and-forward** BLE model: the
+measurement happens on the cuff alone, the cuff stores it
+internally, and the kiosk only retrieves it once the citizen puts
+the cuff in pairing mode (BT button — the BT icon flashes).
+Pairing mode and measurement mode are mutually exclusive on the
+device.
+
+The kiosk's `MeasuringVitalsScreen` reflects this with a **user-gated
+"Connect to cuff" button**. The button publishes
+`BpMeasurementRequested` only when the citizen taps it — the kiosk
+does NOT auto-fire on screen entry, because firing before the cuff
+is in pairing mode produces:
+
+```
+[org.bluez.Error.InProgress] Operation already in progress
+```
+
+…on every retry of `BleakClient(mac).connect()`. BlueZ tries to
+connect to a paired-but-not-advertising device and races its own
+internal scan/connect machinery; `InProgress` is the symptom.
+
+### Symptoms vs causes
+
+| Symptom in journalctl                                                           | Likely cause                                                                           | Fix                                                                                                            |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `omron_bp.connect_attempt_failed` × 5 with `InProgress`, all attempts           | Citizen tapped Connect before pressing the cuff's BT button (cuff not in pairing mode) | Press BT button on cuff first, wait for BT icon to flash, **then** tap Connect on kiosk                        |
+| `omron_bp.connect_attempt_failed` × 5 with `Device not connected` / `Not Found` | Cuff is in pairing mode but the MAC in `device_config.omron_cuff_mac` doesn't match    | Verify with `bluetoothctl info <mac>`; re-pair if needed (see Phase 0 plan)                                    |
+| `omron_bp.request_ignored_already_in_flight`                                    | Two `BpMeasurementRequested` events arrived while one was being handled                | Expected — the GUI's button disables itself on click; this log line confirms the lock did its job              |
+| Connect succeeds but no measurement event after 120 s                           | Cuff didn't have a stored measurement to deliver                                       | Press START on the cuff to take a fresh measurement, then BT button to enter pairing mode, then re-tap Connect |
+
+### Manual reproduction with the bench script
+
+`kiosk/scripts/bench_omron_bp.py` (operator-side reference) runs the
+production `OmronBpSensor` against the bus directly without the
+kiosk GUI. If the bench works but the kiosk doesn't, the gap is in
+the GUI / FSM flow, not the sensor / BLE path.
+
+### Connect button retry behaviour
+
+Tapping the button disables it for **135 seconds** (5 connect
+retries × 2 s + 120 s notify-wait). After that it re-enables so the
+citizen can retry without restarting the session — useful when they
+press the BT button at the wrong moment and the cuff drops out of
+pairing mode mid-handshake.
+
+The button is also re-enabled on every entry to `MEASURING_VITALS`,
+so a citizen who started a fresh session always sees an active
+button regardless of prior state.

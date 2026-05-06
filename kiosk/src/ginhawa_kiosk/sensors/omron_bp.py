@@ -249,12 +249,24 @@ class OmronBpSensor(Sensor):
         *,
         client_factory: Callable[[str], Any] | None = None,
     ) -> None:
+        import asyncio
+
         self._bus = bus
         self._db = db
         self._logger = structlog.get_logger("sensor.omron_bp")
         self._client_factory = client_factory  # tests can inject
         self._mac: str | None = None
         self._running = False
+        # Serialise requests against this sensor. CLAUDE.md "no
+        # concurrent BLE" plus a real-world failure mode: when the
+        # GUI fires ``BpMeasurementRequested`` twice in quick
+        # succession (e.g., a citizen rapid-tapping the connect
+        # button), two ``_handle_request`` invocations would race
+        # ``BleakClient(mac).connect()``. The first wins; the second
+        # gets ``[org.bluez.Error.InProgress] Operation already in
+        # progress``. The lock makes overlapping requests no-op
+        # rather than corrupt the BLE handle.
+        self._request_lock = asyncio.Lock()
 
     async def start(self) -> None:  # pragma: no cover - hardware path
         if self._running:
@@ -292,21 +304,31 @@ class OmronBpSensor(Sensor):
     ) -> None:
         if not self._running or self._mac is None:
             return
-        try:
-            payload = await self._read_one_notification(self._mac)
-        except Exception as exc:
-            self._logger.warning(
-                "omron_bp.connect_failed", mac=self._mac, error=str(exc)
+        # Drop concurrent requests with a clear log line — the GUI
+        # disables the connect button after a tap, but a stray
+        # ``BpMeasurementRequested`` on the bus shouldn't be able to
+        # race the in-flight handler.
+        if self._request_lock.locked():
+            self._logger.info(
+                "omron_bp.request_ignored_already_in_flight", mac=self._mac
             )
             return
-        try:
-            reading = parse_bp_measurement(payload)
-        except ValueError as exc:
-            self._logger.warning(
-                "omron_bp.parse_failed", error=str(exc), bytes=payload.hex()
-            )
-            return
-        await self._publish_reading(reading)
+        async with self._request_lock:
+            try:
+                payload = await self._read_one_notification(self._mac)
+            except Exception as exc:
+                self._logger.warning(
+                    "omron_bp.connect_failed", mac=self._mac, error=str(exc)
+                )
+                return
+            try:
+                reading = parse_bp_measurement(payload)
+            except ValueError as exc:
+                self._logger.warning(
+                    "omron_bp.parse_failed", error=str(exc), bytes=payload.hex()
+                )
+                return
+            await self._publish_reading(reading)
 
     async def _read_one_notification(self, mac: str) -> bytes:
         """Connect, subscribe, await one notification, return payload.
@@ -349,11 +371,21 @@ class OmronBpSensor(Sensor):
         from bleak import BleakClient
         from bleak.exc import BleakError
 
-        client = BleakClient(mac)
+        # Fresh ``BleakClient`` per attempt. Reusing one instance across
+        # retries (the previous design) carried over BlueZ state — once
+        # the first ``connect()`` saw ``[org.bluez.Error.InProgress]``,
+        # every subsequent attempt on the same client object hit the
+        # same error because the underlying D-Bus method call was still
+        # logically pending. A fresh client + best-effort disconnect on
+        # failure lets BlueZ cleanly release the operation between
+        # tries.
+        connected_client: Any | None = None
         last_error: Exception | None = None
         for attempt in range(_BP_CONNECT_RETRIES):
+            candidate = BleakClient(mac)
             try:
-                await client.connect()
+                await candidate.connect()
+                connected_client = candidate
                 break
             except (BleakError, asyncio.TimeoutError) as exc:
                 last_error = exc
@@ -364,9 +396,18 @@ class OmronBpSensor(Sensor):
                     of=_BP_CONNECT_RETRIES,
                     error=str(exc),
                 )
+                # Best-effort: tell BlueZ to release whatever it had
+                # pending on this candidate. Errors on disconnect are
+                # expected (the client never actually connected) so
+                # they are silently absorbed.
+                try:
+                    await candidate.disconnect()
+                except Exception:
+                    pass
                 if attempt < _BP_CONNECT_RETRIES - 1:
                     await asyncio.sleep(_BP_CONNECT_RETRY_DELAY_S)
-        else:
+
+        if connected_client is None:
             raise RuntimeError(
                 f"Omron HEM-7155T at {mac} did not connect after "
                 f"{_BP_CONNECT_RETRIES} attempts — put the cuff into "
@@ -374,11 +415,11 @@ class OmronBpSensor(Sensor):
             )
 
         try:
-            await client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
+            await connected_client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
             payload = await asyncio.wait_for(received, timeout=120.0)
-            await client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
+            await connected_client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
         finally:
-            await client.disconnect()
+            await connected_client.disconnect()
         return payload
 
     async def _publish_reading(self, reading: BpReading) -> None:

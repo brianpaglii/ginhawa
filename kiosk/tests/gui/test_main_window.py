@@ -8,6 +8,7 @@ becomes the current widget.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock
@@ -211,6 +212,76 @@ def test_main_window_filters_invalid_measurements_on_report(
     assert list_widget is not None
     assert list_widget.count() == 1
     assert "128 mmHg" in list_widget.item(0).text()
+
+
+# Verifies entry to MEASURING_VITALS does NOT auto-publish
+# BpMeasurementRequested — the citizen must tap the connect button
+# first. The 2026-05-05 InProgress regression was caused by firing
+# on state entry, before the cuff was in pairing mode. Mortality:
+# 'Would fail if the auto-fire regression came back.'
+@pytest.mark.asyncio
+async def test_measuring_vitals_does_not_autopublish_bp_request(
+    main_window: KioskMainWindow,
+    fsm: SessionFSM,
+    bus: EventBus,
+    db_session: Session,
+) -> None:
+    from ginhawa_kiosk.fsm import BpMeasurementRequested
+
+    received: list[BpMeasurementRequested] = []
+
+    async def listener(event: BpMeasurementRequested) -> None:
+        received.append(event)
+
+    bus.subscribe(BpMeasurementRequested, listener)
+
+    fsm.rfid_scanned("CARD_BP_AUTOPUBLISH")
+    fsm.citizen_identified(_make_citizen(db_session))
+    fsm.language_chosen("en")
+    fsm.path_selected("vitals")
+    assert _current_object_name(main_window) == "measuring_vitals_screen"
+
+    # Yield once so any erroneously-scheduled task gets to run.
+    await asyncio.sleep(0)
+    assert received == [], (
+        "MEASURING_VITALS entry must not auto-publish BpMeasurementRequested; "
+        f"got {len(received)} events"
+    )
+
+
+# Verifies tapping the connect-to-cuff button publishes exactly one
+# BpMeasurementRequested. The whole point of the user-gated flow:
+# the request only fires when the citizen has the cuff in pairing
+# mode and chooses to connect. Mortality: 'Would fail if the button
+# weren't wired to the bus.'
+@pytest.mark.asyncio
+async def test_connect_to_cuff_button_publishes_bp_request(
+    main_window: KioskMainWindow,
+    fsm: SessionFSM,
+    bus: EventBus,
+    db_session: Session,
+) -> None:
+    from ginhawa_kiosk.fsm import BpMeasurementRequested
+
+    received: list[BpMeasurementRequested] = []
+
+    async def listener(event: BpMeasurementRequested) -> None:
+        received.append(event)
+
+    bus.subscribe(BpMeasurementRequested, listener)
+
+    fsm.rfid_scanned("CARD_BP_BUTTON")
+    fsm.citizen_identified(_make_citizen(db_session))
+    fsm.language_chosen("en")
+    fsm.path_selected("vitals")
+
+    main_window._measuring_vitals_screen.connect_to_cuff_requested.emit()
+    # Drain pending tasks so the create_task(bus.publish(...)) coroutine
+    # actually runs to the listener.
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert len(received) == 1
 
 
 def _make_citizen(db: Session) -> Citizen:
