@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 from ..db.models import DeviceConfig
 from ..fsm.event_bus import EventBus, MeasurementProposed
 from .base import Sensor, SensorUnavailable
+from .ble_lock import BleAdapterLock
 
 
 _BINDKEY_CONFIG_KEY = "xiaomi_scale_bindkey"
@@ -189,6 +190,7 @@ class XiaomiScaleSensor(Sensor):
         db: Session,
         *,
         clock: Callable[[], float] | None = None,
+        ble_lock: BleAdapterLock | None = None,
     ) -> None:
         self._bus = bus
         self._db = db
@@ -197,6 +199,12 @@ class XiaomiScaleSensor(Sensor):
         self._device_data: Any | None = None
         self._scanner: Any | None = None
         self._running = False
+        # Optional adapter-coordinator. When set, the scanner registers
+        # pause/resume hooks so the Omron BP cuff's directed connect
+        # can briefly take exclusive use of hci0 — see
+        # :mod:`ginhawa_kiosk.sensors.ble_lock` for the why.
+        self._ble_lock = ble_lock
+        self._paused = False
 
     async def start(self) -> None:
         if self._running:  # pragma: no cover - idempotency guard
@@ -227,13 +235,52 @@ class XiaomiScaleSensor(Sensor):
         self._scanner = self._build_scanner()  # pragma: no cover
         await self._scanner.start()  # pragma: no cover
         self._running = True  # pragma: no cover
+        if self._ble_lock is not None:  # pragma: no cover - hardware path
+            self._ble_lock.register_scanner(
+                pause=self._pause_scanner, resume=self._resume_scanner
+            )
 
     async def stop(self) -> None:  # pragma: no cover - hardware path
+        if self._ble_lock is not None:
+            self._ble_lock.unregister_scanner(
+                pause=self._pause_scanner, resume=self._resume_scanner
+            )
         if self._scanner is not None:
             await self._scanner.stop()
             self._scanner = None
         self._device_data = None
         self._running = False
+        self._paused = False
+
+    async def _pause_scanner(self) -> None:  # pragma: no cover - hardware path
+        """Stop the BleakScanner so the BLE adapter is free for a directed connect.
+
+        Idempotent: if the scanner is already paused (or never
+        started) this is a no-op. The :class:`BleAdapterLock` guards
+        against concurrent ``exclusive()`` blocks, so we don't need
+        to count nested pauses.
+        """
+        if self._paused or self._scanner is None:
+            return
+        try:
+            await self._scanner.stop()
+        except Exception as exc:
+            self._logger.warning("xiaomi_scale.pause_failed", error=type(exc).__name__)
+            return
+        self._paused = True
+        self._logger.info("xiaomi_scale.paused")
+
+    async def _resume_scanner(self) -> None:  # pragma: no cover - hardware path
+        """Restart the BleakScanner after a connect-style sensor releases the adapter."""
+        if not self._paused or self._scanner is None:
+            return
+        try:
+            await self._scanner.start()
+        except Exception as exc:
+            self._logger.warning("xiaomi_scale.resume_failed", error=type(exc).__name__)
+            return
+        self._paused = False
+        self._logger.info("xiaomi_scale.resumed")
 
     @property
     def is_running(self) -> bool:

@@ -59,6 +59,7 @@ from ..fsm.event_bus import (
     MeasurementProposed,
 )
 from .base import Sensor, SensorUnavailable
+from .ble_lock import BleAdapterLock
 
 
 _BP_MEASUREMENT_CHAR_UUID = "00002a35-0000-1000-8000-00805f9b34fb"
@@ -248,6 +249,7 @@ class OmronBpSensor(Sensor):
         db: Session,
         *,
         client_factory: Callable[[str], Any] | None = None,
+        ble_lock: BleAdapterLock | None = None,
     ) -> None:
         import asyncio
 
@@ -267,6 +269,13 @@ class OmronBpSensor(Sensor):
         # progress``. The lock makes overlapping requests no-op
         # rather than corrupt the BLE handle.
         self._request_lock = asyncio.Lock()
+        # Adapter-wide coordinator: pauses the Xiaomi scanner during
+        # the BP connect. The 2026-05-06 bench surfaced exactly this
+        # collision (Xiaomi's continuous BleakScanner + Omron's
+        # directed connect on the same hci0 adapter -> InProgress on
+        # every retry). With the lock acquired, the Xiaomi side
+        # stops, the BP path runs, then the Xiaomi side resumes.
+        self._ble_lock = ble_lock
 
     async def start(self) -> None:  # pragma: no cover - hardware path
         if self._running:
@@ -315,8 +324,18 @@ class OmronBpSensor(Sensor):
             return
         async with self._request_lock:
             self._logger.info("omron_bp.request_started", mac=self._mac)
+            # Acquire the BLE adapter exclusively for the duration of
+            # the directed connect. The Xiaomi scale's continuous
+            # scanner pauses on entry and resumes on exit (success or
+            # failure). When ble_lock is None — typical of unit tests
+            # that inject a client_factory — fall through without
+            # serialisation.
             try:
-                payload = await self._read_one_notification(self._mac)
+                if self._ble_lock is not None:
+                    async with self._ble_lock.exclusive():
+                        payload = await self._read_one_notification(self._mac)
+                else:
+                    payload = await self._read_one_notification(self._mac)
             except Exception as exc:
                 self._logger.warning(
                     "omron_bp.connect_failed", mac=self._mac, error=str(exc)

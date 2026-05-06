@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ..core.config import Settings
 from ..fsm.event_bus import EventBus
 from .base import Sensor, SensorUnavailable
+from .ble_lock import BleAdapterLock
 from .mqtt_sensors import MockMqttSensors, MqttSensorSubscriber
 from .omron_bp import MockOmronBp, OmronBpSensor
 from .rfid import Mfrc522RfidReader, MockRfidReader
@@ -27,6 +28,7 @@ from .xiaomi_scale import MockXiaomiScale, XiaomiScaleSensor
 
 
 __all__ = [
+    "BleAdapterLock",
     "Mfrc522RfidReader",
     "MockMqttSensors",
     "MockOmronBp",
@@ -52,16 +54,30 @@ def create_rfid_reader(bus: EventBus, settings: Settings) -> Sensor:
     return Mfrc522RfidReader(bus)  # pragma: no cover - Pi-only path
 
 
-def create_xiaomi_scale(bus: EventBus, settings: Settings, db: Session) -> Sensor:
+def create_xiaomi_scale(
+    bus: EventBus,
+    settings: Settings,
+    db: Session,
+    *,
+    ble_lock: BleAdapterLock | None = None,
+) -> Sensor:
     if settings.MOCK_HARDWARE:
         return MockXiaomiScale(bus)
-    return XiaomiScaleSensor(bus, db)  # pragma: no cover - hardware path
+    return XiaomiScaleSensor(  # pragma: no cover - hardware path
+        bus, db, ble_lock=ble_lock
+    )
 
 
-def create_omron_bp(bus: EventBus, settings: Settings, db: Session) -> Sensor:
+def create_omron_bp(
+    bus: EventBus,
+    settings: Settings,
+    db: Session,
+    *,
+    ble_lock: BleAdapterLock | None = None,
+) -> Sensor:
     if settings.MOCK_HARDWARE:
         return MockOmronBp(bus)
-    return OmronBpSensor(bus, db)  # pragma: no cover - hardware path
+    return OmronBpSensor(bus, db, ble_lock=ble_lock)  # pragma: no cover
 
 
 def create_mqtt_sensors(bus: EventBus, settings: Settings, db: Session) -> Sensor:
@@ -83,10 +99,17 @@ def create_all_sensors(
     The application's lifecycle manager calls ``start()`` and
     ``stop()`` on each Sensor in coordination with the FSM and sync
     daemon.
+
+    A single :class:`BleAdapterLock` is constructed here and shared
+    between the Xiaomi scale (which holds the adapter via continuous
+    passive scan) and the Omron BP cuff (which needs exclusive
+    access for directed connects). CLAUDE.md "no concurrent BLE";
+    see :mod:`ginhawa_kiosk.sensors.ble_lock`.
     """
+    ble_lock = BleAdapterLock()
     return {
         "rfid": create_rfid_reader(bus, settings),
-        "xiaomi_scale": create_xiaomi_scale(bus, settings, db),
-        "omron_bp": create_omron_bp(bus, settings, db),
+        "xiaomi_scale": create_xiaomi_scale(bus, settings, db, ble_lock=ble_lock),
+        "omron_bp": create_omron_bp(bus, settings, db, ble_lock=ble_lock),
         "mqtt_sensors": create_mqtt_sensors(bus, settings, db),
     }
