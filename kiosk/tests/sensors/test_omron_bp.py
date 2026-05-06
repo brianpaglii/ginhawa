@@ -64,12 +64,15 @@ def test_omron_bp_parses_sig_blood_pressure_measurement() -> None:
 # after the timestamp. The bench Pi cuff stamps every measurement
 # this way; the parser must surface the timestamp so the kiosk can
 # tell a fresh reading from a stored historical one.
+# The SIG Date Time field carries no timezone — the parser tags
+# the value with the host's local timezone (see _parse_timestamp
+# docstring), so we assert the wall-clock fields round-trip
+# faithfully and that the result is tz-aware regardless of the
+# test machine's timezone.
 # Mortality: would fail if the timestamp parser dropped bytes,
-# byte-swapped the year, or misaligned the post-timestamp pulse
-# offset.
+# byte-swapped the year, misaligned the post-timestamp pulse
+# offset, or stopped attaching a tzinfo.
 def test_omron_bp_parser_extracts_optional_timestamp() -> None:
-    from datetime import datetime, timezone
-
     payload = bytes(
         [
             0x06,  # flags: time-stamp + pulse-rate present
@@ -92,17 +95,20 @@ def test_omron_bp_parser_extracts_optional_timestamp() -> None:
     )
     reading = parse_bp_measurement(payload)
     assert reading.pulse_bpm == pytest.approx(75.0)
-    assert reading.taken_at == datetime(2024, 5, 2, 14, 30, 0, tzinfo=timezone.utc)
+    assert reading.taken_at is not None
+    assert reading.taken_at.tzinfo is not None
+    assert reading.taken_at.replace(tzinfo=None) == datetime(2024, 5, 2, 14, 30, 0)
 
 
 # Verifies the exact payload the bench Pi's cuff returned on
 # 2026-05-06 — proves the parser handles real-world data, not just
-# synthetic. Timestamp 2026-05-06 13:25:22 UTC, pulse 104, systolic
-# 130, diastolic 71. Mortality: would fail if any decoder drift
-# corrupted the bench-validated payload.
+# synthetic. Wall-clock fields 2026-05-06 13:25:22, pulse 104,
+# systolic 130, diastolic 71. The parser tags the timestamp with
+# the host's local tz; the assertion strips tzinfo to round-trip
+# the wall-clock fields independently of test-env timezone.
+# Mortality: would fail if any decoder drift corrupted the
+# bench-validated payload.
 def test_omron_bp_parser_decodes_bench_pi_payload() -> None:
-    from datetime import datetime, timezone
-
     payload = bytes(
         [
             0x1E,  # flags: timestamp + pulse + user-id + status
@@ -130,7 +136,9 @@ def test_omron_bp_parser_decodes_bench_pi_payload() -> None:
     assert reading.systolic_mmhg == pytest.approx(130.0)
     assert reading.diastolic_mmhg == pytest.approx(71.0)
     assert reading.pulse_bpm == pytest.approx(104.0)
-    assert reading.taken_at == datetime(2026, 5, 6, 13, 25, 22, tzinfo=timezone.utc)
+    assert reading.taken_at is not None
+    assert reading.taken_at.tzinfo is not None
+    assert reading.taken_at.replace(tzinfo=None) == datetime(2026, 5, 6, 13, 25, 22)
 
 
 # Verifies the timestamp parser returns None when the cuff sends a
@@ -266,6 +274,71 @@ def test_is_fresh_future_beyond_window() -> None:
 
     # 600 s in the future — well outside the 180 s window.
     assert _is_fresh(now_fixed + timedelta(seconds=600), now=now) is False
+
+
+# Verifies _parse_timestamp tags the decoded value with the host's
+# local tz (not hard-coded UTC). The SIG Date Time field carries no
+# timezone metadata and the cuff transmits local wall-clock; the
+# parser fix attaches whatever zone /etc/localtime resolves to so
+# downstream comparisons against datetime.now(timezone.utc) work.
+# Mortality: would fail if the parser reverted to tzinfo=timezone.utc
+# (the 2026-05-06 bench bug — every reading appeared 8 h ahead on a
+# UTC Pi in a UTC+8 deployment).
+def test_parse_timestamp_returns_local_aware() -> None:
+    payload = bytes(
+        [
+            0x06,  # flags: time-stamp + pulse-rate present
+            0x78,
+            0x00,  # systolic
+            0x50,
+            0x00,  # diastolic
+            0x5D,
+            0x00,  # MAP
+            0xE8,
+            0x07,  # year LSB-MSB = 2024
+            0x05,
+            0x02,
+            0x0E,
+            0x1E,
+            0x00,  # 2024-05-02 14:30:00 (wall-clock)
+            0x4B,
+            0x00,
+        ]
+    )
+    reading = parse_bp_measurement(payload)
+    assert reading.taken_at is not None
+    # tzinfo must be attached, regardless of which tz the test runs in.
+    assert reading.taken_at.tzinfo is not None
+    # Round-tripping through UTC must yield the same instant as
+    # interpreting the raw wall-clock as local — that's the fix.
+    expected_utc = datetime(2024, 5, 2, 14, 30, 0).astimezone(timezone.utc)
+    assert reading.taken_at.astimezone(timezone.utc) == expected_utc
+
+
+# Regression guard for the 2026-05-06 timezone bug. Simulates a Pi
+# running UTC in a non-UTC deployment: the cuff encoded local
+# wall-clock time, the parser tagged it with the host's local tz,
+# and the freshness gate compares against a fixed UTC "now". A
+# reading taken 60 s ago should be fresh — pre-fix it would appear
+# (UTC_offset) hours in the future and the gate would drop it.
+# Mortality: would fail if the parser reverted to UTC tagging OR
+# if _is_fresh stopped doing aware-aware subtraction.
+def test_freshness_with_local_cuff_timestamp_pi_in_utc() -> None:
+    from ginhawa_kiosk.sensors.omron_bp import _is_fresh
+
+    fixed_utc_now = datetime(2026, 5, 6, 11, 22, 45, tzinfo=timezone.utc)
+
+    def now() -> datetime:
+        return fixed_utc_now
+
+    # Construct taken_at the way the parser fix produces it: take a
+    # real instant 60 s before "now", express it in the host's local
+    # zone so the resulting datetime is aware-local. This mirrors
+    # what _parse_timestamp does end-to-end.
+    taken_at_local = (fixed_utc_now - timedelta(seconds=60)).astimezone()
+    assert taken_at_local.tzinfo is not None  # sanity
+
+    assert _is_fresh(taken_at_local, now=now) is True
 
 
 # Verifies the parser raises a clear error on a payload that's
@@ -570,7 +643,7 @@ async def test_drains_stored_readings_and_captures_fresh(
     mocker: Any,
 ) -> None:
     db_session = mocker.MagicMock(name="DbSession")
-    now = datetime.now(timezone.utc)
+    now = datetime.now()  # naive local — matches how the cuff encodes wall-clock
     stale_a = _build_bp_payload(
         now - timedelta(hours=5), systolic=140, diastolic=85, pulse=70
     )
@@ -610,7 +683,7 @@ async def test_timeout_fires_when_no_fresh_reading(
     mocker: Any,
 ) -> None:
     db_session = mocker.MagicMock(name="DbSession")
-    now = datetime.now(timezone.utc)
+    now = datetime.now()  # naive local — see _build_bp_payload docstring
     stale_a = _build_bp_payload(now - timedelta(hours=5), systolic=140, diastolic=85)
     stale_b = _build_bp_payload(now - timedelta(hours=1), systolic=132, diastolic=84)
     mock_client = _make_mock_connected_client(mocker, stale_a, stale_b)
@@ -646,9 +719,7 @@ async def test_immediate_fresh_reading(
     mocker: Any,
 ) -> None:
     db_session = mocker.MagicMock(name="DbSession")
-    fresh = _build_bp_payload(
-        datetime.now(timezone.utc), systolic=118, diastolic=78, pulse=70
-    )
+    fresh = _build_bp_payload(datetime.now(), systolic=118, diastolic=78, pulse=70)
     mock_client = _make_mock_connected_client(mocker, fresh)
     mocker.patch("bleak.BleakClient", return_value=mock_client)
 
@@ -680,9 +751,7 @@ async def test_parse_failure_skipped_drain_continues(
 ) -> None:
     db_session = mocker.MagicMock(name="DbSession")
     garbage = bytes([0x04, 0x78, 0x00])  # too short
-    fresh = _build_bp_payload(
-        datetime.now(timezone.utc), systolic=120, diastolic=80, pulse=72
-    )
+    fresh = _build_bp_payload(datetime.now(), systolic=120, diastolic=80, pulse=72)
     mock_client = _make_mock_connected_client(mocker, garbage, fresh)
     mocker.patch("bleak.BleakClient", return_value=mock_client)
 
@@ -768,6 +837,13 @@ def _build_bp_payload(
     pulse-rate present). Integer args go in as the SFLOAT-16
     mantissa with exponent 0, which matches how the cuff actually
     encodes whole-number mmHg / bpm readings.
+
+    Only the wall-clock fields of ``taken_at`` (year/month/day/
+    hour/minute/second) end up in the payload; tzinfo is ignored.
+    Real cuffs encode local wall-clock with no tz metadata, so
+    callers should pass naive local datetimes (``datetime.now()``)
+    when simulating fresh readings — the parser now tags decoded
+    timestamps with the host's local tz.
     """
     return bytes(
         [
@@ -792,8 +868,17 @@ def _build_bp_payload(
 
 
 def _fresh_bp_payload(**kwargs: Any) -> bytes:
-    """Build a payload stamped 'now' so it passes the freshness gate."""
-    return _build_bp_payload(datetime.now(timezone.utc), **kwargs)
+    """Build a payload stamped 'now' so it passes the freshness gate.
+
+    Uses naive local time (``datetime.now()``) because the parser
+    now interprets SIG Date Time bytes as local wall-clock. Using
+    UTC fields here would re-introduce the 2026-05-06 bug pattern
+    on any non-UTC test machine: the encoded bytes would be UTC
+    hour/minute, the parser would interpret them as local, and
+    on e.g. a UTC+8 host the round-tripped instant would be 8 h
+    in the future of ``datetime.now(timezone.utc)``.
+    """
+    return _build_bp_payload(datetime.now(), **kwargs)
 
 
 class _CapturingLogger:

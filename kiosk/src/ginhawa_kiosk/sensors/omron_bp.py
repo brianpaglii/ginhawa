@@ -113,12 +113,15 @@ class BpReading:
     diastolic_mmhg: float
     map_mmhg: float
     pulse_bpm: float | None  # None when the cuff didn't report pulse
-    # Timestamp embedded in the SIG payload (bytes 7-13). The cuff
-    # uses local-clock time without a timezone marker; we attach UTC
-    # because that's what the cuff's clock IS configured to in
-    # production (set during commissioning). None when the cuff
-    # didn't include a timestamp — older firmware revisions or
-    # non-Omron BP devices that share the SIG profile may omit it.
+    # Timestamp embedded in the SIG payload (bytes 7-13). The SIG
+    # Date Time field has no timezone marker; the cuff transmits
+    # whatever wall-clock its internal RTC is set to (in practice,
+    # the deployment's local time). The parser tags the value with
+    # the host's local timezone so freshness comparisons against
+    # ``datetime.now(...)`` reduce to a common UTC instant
+    # regardless of whether the Pi is set to UTC or local. None when
+    # the cuff didn't include a timestamp — older firmware revisions
+    # or non-Omron BP devices that share the SIG profile may omit it.
     taken_at: datetime | None
 
 
@@ -193,16 +196,16 @@ def _is_fresh(
     citizen.
 
     Otherwise returns ``True`` iff
-    ``abs(now - taken_at) <= window_s``. The check is intentionally
-    symmetric: the HEM-7155T tags every BLE timestamp ``+00:00``
-    but encodes its local wall-clock time in the bytes, so a Pi
-    running UTC in a UTC+8 deployment sees the cuff's "now" as
-    ~8 h in the future. We can't detect or correct the offset at
-    this layer (different deployments, different cuffs, possibly
-    different skew per device), so we accept skew up to the
-    freshness window in either direction. Anything outside the
-    window — past or future — is treated as a stale stored reading
-    and dropped.
+    ``abs(now - taken_at) <= window_s``. The check is symmetric to
+    tolerate small clock drift between the cuff's RTC and the Pi
+    (the cuff's RTC is not network-synchronised; a few seconds of
+    skew either direction is normal and shouldn't drop a fresh
+    reading). The wall-clock-vs-timezone mismatch the cuff used to
+    introduce — encoding local time in a SIG field that carries no
+    tz metadata — is corrected upstream in :func:`_parse_timestamp`
+    by tagging the value with the host's local timezone, so by the
+    time we get here both ``now`` and ``taken_at`` reduce to the
+    same UTC instant.
 
     ``now`` is injectable for tests; defaults to UTC wall-clock.
     """
@@ -218,6 +221,20 @@ def _is_fresh(
 def _parse_timestamp(raw: bytes) -> datetime | None:
     """Decode the SIG Date Time field (7 bytes, year LSB-MSB then m/d/h/m/s).
 
+    The SIG Date Time field carries wall-clock time with NO timezone
+    metadata. The HEM-7155T cuff's internal RTC is set to deployment
+    local time, so the bytes encode local wall-clock — naively
+    attaching UTC would put a UTC+8 cuff's reading 8 h in the future
+    of the kiosk's ``datetime.now(timezone.utc)`` and trip the
+    freshness gate every time (2026-05-06 bench).
+
+    We construct a naive datetime from the bytes and call
+    ``.astimezone()`` (no argument) which resolves the host's local
+    timezone via ``/etc/localtime`` and returns an aware datetime in
+    that zone. Downstream comparisons against ``datetime.now(...)``
+    work on a common UTC instant regardless of which zone either
+    side carries.
+
     Returns ``None`` if the cuff sent an obviously bogus timestamp
     (year 0, out-of-range month/day/etc) — keeps a malformed clock
     from crashing the BP path. Out-of-range readings are caught by
@@ -232,9 +249,10 @@ def _parse_timestamp(raw: bytes) -> datetime | None:
     if year == 0:
         return None
     try:
-        return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+        naive = datetime(year, month, day, hour, minute, second)
     except ValueError:
         return None
+    return naive.astimezone()
 
 
 # ---------------------------------------------------------------------------
