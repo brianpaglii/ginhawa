@@ -244,6 +244,14 @@ class SessionFSM:
         self._error_reason: str | None = None
         self._abort_attribution: ActorType = "citizen"
 
+        # Journal-side logger for state-change traces. The audit_log
+        # table (via record_audit) is the forensic record; structlog
+        # is the real-time ops trace. Both are written on every
+        # transition.
+        import structlog
+
+        self._fsm_logger = structlog.get_logger("fsm.session")
+
         self.signals = _FsmSignals()
 
         self._machine = Machine(
@@ -852,4 +860,16 @@ class SessionFSM:
     def _emit_state_changed(self, *args: Any, **kwargs: Any) -> None:
         # ``transitions`` invokes after_state_change with the trigger
         # arguments; we ignore them and snapshot the resulting state.
-        self.signals.state_changed.emit(self.state, self.snapshot())
+        snapshot = self.snapshot()
+        # Journal trace of the FSM walk — pairs with record_audit's
+        # encrypted-DB trail. Per CLAUDE.md, structured fields only,
+        # no PII at INFO level: language is fine, citizen-id is a
+        # UUID (fine), but the citizen's RFID UID / name never appear.
+        self._fsm_logger.info(
+            "fsm.state_changed",
+            state=snapshot.state,
+            session_language=snapshot.session_language,
+            session_id=snapshot.current_session_id,
+            has_citizen=snapshot.current_citizen_id is not None,
+        )
+        self.signals.state_changed.emit(snapshot.state, snapshot)

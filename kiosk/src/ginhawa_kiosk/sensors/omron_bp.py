@@ -314,6 +314,7 @@ class OmronBpSensor(Sensor):
             )
             return
         async with self._request_lock:
+            self._logger.info("omron_bp.request_started", mac=self._mac)
             try:
                 payload = await self._read_one_notification(self._mac)
             except Exception as exc:
@@ -328,6 +329,11 @@ class OmronBpSensor(Sensor):
                     "omron_bp.parse_failed", error=str(exc), bytes=payload.hex()
                 )
                 return
+            self._logger.info(
+                "omron_bp.measurement_received",
+                mac=self._mac,
+                has_pulse=reading.pulse_bpm is not None,
+            )
             await self._publish_reading(reading)
 
     async def _read_one_notification(self, mac: str) -> bytes:

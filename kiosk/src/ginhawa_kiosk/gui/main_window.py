@@ -128,6 +128,21 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _hash_uid(uid: str) -> str:
+    """8-char SHA-256 prefix of an RFID UID, for journal correlation only.
+
+    CLAUDE.md "Never log sensitive personal information at INFO level
+    or higher": the raw UID stays out of stdout / journalctl. The
+    audit_log table holds the unhashed UID under SQLCipher for the
+    forensic record; this short hash lets a developer correlate two
+    taps of the same card within a debug window without reversing
+    the citizen identity.
+    """
+    import hashlib
+
+    return hashlib.sha256(uid.encode("utf-8")).hexdigest()[:8]
+
+
 class KioskMainWindow(QMainWindow):
     """The kiosk's single top-level window.
 
@@ -239,7 +254,7 @@ class KioskMainWindow(QMainWindow):
         self._register_form_screen.submitted.connect(self._on_registration_submitted)
         self._consent_screen.consent_given.connect(self._on_consent_given)
         self._consent_screen.consent_refused.connect(self._fsm.consent_refused)
-        self._path_choice_screen.path_selected.connect(self._fsm.path_selected)
+        self._path_choice_screen.path_selected.connect(self._on_path_selected)
         self._report_screen.print_requested.connect(self._on_print_requested)
         self._report_screen.finish_without_printing_requested.connect(
             self._fsm.finish_without_printing
@@ -343,12 +358,18 @@ class KioskMainWindow(QMainWindow):
         if language not in ("en", "tl"):
             _log.error("main_window.invalid_language", language=language)
             return
+        _log.info("main_window.language_chosen", language=language)
         self._fsm.language_chosen(language)  # type: ignore[arg-type]
 
     def _on_registration_submitted(self, data: object) -> None:
         if not isinstance(data, RegistrationData):
             _log.error("main_window.bad_registration_payload", data=type(data).__name__)
             return
+        _log.info(
+            "main_window.registration_submitted",
+            sex=data.sex,
+            has_phone=bool(data.phone),
+        )
         # Insert the Citizen row attributed to a self-service
         # registration (registered_by=None). The FSM owns the audit
         # row for the registration_complete transition; the main
@@ -386,13 +407,19 @@ class KioskMainWindow(QMainWindow):
         self._fsm.registration_complete()
         self._db.commit()
 
+    def _on_path_selected(self, path: str) -> None:
+        _log.info("main_window.path_selected", path=path)
+        self._fsm.path_selected(path)  # type: ignore[arg-type]
+
     def _on_consent_given(self) -> None:
+        _log.info("main_window.consent_given")
         self._fsm.consent_given()
         self._db.commit()
 
     def _on_print_requested(self) -> None:
         # Only fire the FSM transition; the actual print kicks off
         # in _kick_off_print_job once the FSM lands on PRINTING.
+        _log.info("main_window.print_requested")
         self._fsm.print_requested()
 
     def _on_bp_connect_requested(self) -> None:
@@ -405,6 +432,7 @@ class KioskMainWindow(QMainWindow):
         (5 connect retries × 2 s + 120 s notify-wait) so the citizen
         can retry if the connection silently fails.
         """
+        _log.info("main_window.bp_connect_requested")
         asyncio.create_task(self._bus.publish(BpMeasurementRequested()))
         # Re-enable the button after the sensor's worst-case window so
         # a failed connect doesn't leave the citizen stuck.
@@ -415,12 +443,14 @@ class KioskMainWindow(QMainWindow):
 
     def _on_cancel(self) -> None:
         # Cancel from any cancellable state → ABORTED.
+        _log.info("main_window.cancel_requested", from_state=self._fsm.state)
         try:
             self._fsm.cancel()
         except Exception as exc:  # pragma: no cover - defensive guard
             _log.warning("main_window.cancel_invalid", error=type(exc).__name__)
 
     def _on_change_language(self) -> None:
+        _log.info("main_window.change_language_requested", from_state=self._fsm.state)
         try:
             self._fsm.change_language()
         except Exception as exc:  # pragma: no cover - defensive guard
@@ -434,6 +464,12 @@ class KioskMainWindow(QMainWindow):
 
     async def _on_rfid_scanned_event(self, event: RfidScanned) -> None:
         # 1) Tell the FSM the citizen tapped (IDLE → IDENTIFYING)
+        # Per CLAUDE.md "Never log sensitive personal information at
+        # INFO level": the raw RFID UID stays out of the journal. The
+        # audit_log table records the UID under SQLCipher; here we
+        # only note that a tap occurred and a hashed handle for cross-
+        # correlating taps within a debug session.
+        _log.info("main_window.rfid_scanned", uid_short=_hash_uid(event.uid))
         self._fsm.rfid_scanned(event.uid)
         # 2) Run the citizen lookup (async, may hit the DB)
         try:
@@ -454,10 +490,20 @@ class KioskMainWindow(QMainWindow):
             details={"rfid_uid": event.uid, "found": citizen is not None},
         )
         self._db.flush()
+        _log.info("main_window.citizen_identified", citizen_found=citizen is not None)
         self._fsm.citizen_identified(citizen)
 
     async def _on_measurement_proposed_event(self, event: MeasurementProposed) -> None:
         # Validate, persist, and update the live screen.
+        # Type + unit are not PII; the value is, so it stays out of
+        # the journal at INFO level (it lands in the encrypted
+        # measurements table via the persist below).
+        _log.info(
+            "main_window.measurement_proposed",
+            type=event.measurement_type,
+            unit=event.unit,
+            source_device=event.source_device,
+        )
         result = validate_measurement(event.measurement_type, event.value, event.unit)
 
         # The session row is created on entry to PATH_CHOICE (or after
