@@ -10,6 +10,7 @@ import {
   type Page,
   type SessionRead,
 } from "../api/client";
+import { Pagination } from "../components/Pagination";
 import { StatusPill } from "../components/StatusPill";
 import { formatDateTime } from "../lib/datetime";
 import styles from "./SessionsPage.module.css";
@@ -65,10 +66,6 @@ export function SessionsPage() {
   }
 
   const data = sessionsQuery.data;
-  const total = data.total;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const showingFrom = total === 0 ? 0 : page * PAGE_SIZE + 1;
-  const showingTo = Math.min(total, page * PAGE_SIZE + data.items.length);
 
   return (
     <section>
@@ -130,34 +127,14 @@ export function SessionsPage() {
         </div>
       )}
 
-      {total > 0 && (
-        <div className={styles.pagination}>
-          <span>
-            Showing {showingFrom}–{showingTo} of {total}
-          </span>
-          <div className={styles.pageBtns}>
-            <button
-              type="button"
-              className={styles.btn}
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0 || sessionsQuery.isFetching}
-            >
-              Previous
-            </button>
-            <span aria-live="polite">
-              Page {page + 1} of {totalPages}
-            </span>
-            <button
-              type="button"
-              className={styles.btn}
-              onClick={() => setPage((p) => p + 1)}
-              disabled={page + 1 >= totalPages || sessionsQuery.isFetching}
-            >
-              Next
-            </button>
-          </div>
-        </div>
-      )}
+      <Pagination
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={data.total}
+        shown={data.items.length}
+        busy={sessionsQuery.isFetching}
+        onPageChange={setPage}
+      />
     </section>
   );
 }

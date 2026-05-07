@@ -51,6 +51,18 @@ export function AppLayout() {
                 Sessions
               </NavLink>
             </li>
+            <li>
+              <NavLink
+                to="/citizens"
+                className={({ isActive }) =>
+                  isActive
+                    ? `${styles.navLink} ${styles.navLinkActive}`
+                    : styles.navLink
+                }
+              >
+                Citizens
+              </NavLink>
+            </li>
           </ul>
         </nav>
         <main className={styles.main}>

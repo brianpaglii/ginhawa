@@ -2,6 +2,8 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { useAuth } from "./auth/AuthContext";
 import { AppLayout } from "./layouts/AppLayout";
+import { CitizenDetailPage } from "./pages/CitizenDetailPage";
+import { CitizensPage } from "./pages/CitizensPage";
 import { LoginPage } from "./pages/LoginPage";
 import { SessionDetailPage } from "./pages/SessionDetailPage";
 import { SessionsPage } from "./pages/SessionsPage";
@@ -33,6 +35,8 @@ function App() {
         <Route element={<AppLayout />}>
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/sessions/:id" element={<SessionDetailPage />} />
+          <Route path="/citizens" element={<CitizensPage />} />
+          <Route path="/citizens/:id" element={<CitizenDetailPage />} />
           {/* /dashboard preserved as a redirect for any bookmarks */}
           <Route
             path="/dashboard"

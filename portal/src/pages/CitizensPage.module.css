@@ -19,6 +19,28 @@
   margin: 0.25rem 0 0;
 }
 
+.searchWrap {
+  flex: 0 0 auto;
+}
+
+.search {
+  appearance: none;
+  width: 18rem;
+  max-width: 100%;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  background: #ffffff;
+  color: #111827;
+}
+
+.search:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: -1px;
+  border-color: #2563eb;
+}
+
 .tableWrap {
   background: #ffffff;
   border: 1px solid #d8dde3;
@@ -42,6 +64,21 @@
   text-transform: uppercase;
 }
 
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sortable:hover {
+  color: #1f2937;
+}
+
+.sortIcon {
+  margin-left: 0.3rem;
+  font-size: 0.7rem;
+  color: #9ca3af;
+}
+
 .table th,
 .table td {
   padding: 0.7rem 1rem;
@@ -59,6 +96,24 @@
 
 .table tbody tr:last-child td {
   border-bottom: none;
+}
+
+.statusBadge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.statusActive {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.statusInactive {
+  background: #e5e7eb;
+  color: #4b5563;
 }
 
 .empty {
