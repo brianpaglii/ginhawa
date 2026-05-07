@@ -142,6 +142,9 @@ export interface ListSessionsParams {
   started_after?: string;
   started_before?: string;
   barangay?: string;
+  // "asc" | "desc"; the cloud sorts started_at in this direction.
+  // Defaults to "desc" server-side.
+  sort_dir?: "asc" | "desc";
   limit?: number;
   offset?: number;
 }
