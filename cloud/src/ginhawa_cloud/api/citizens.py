@@ -134,8 +134,13 @@ def list_citizens(
     count_stmt = scope_citizens_query(count_stmt, current_user)
 
     total = db.execute(count_stmt).scalar_one()
+    # Newest-registered first — mirrors the BHW portal's session list
+    # convention. Server-side ordering is the only place this is
+    # meaningful (client-side sort can only re-order the current page).
     rows = (
-        db.execute(stmt.order_by(Citizen.registered_at).offset(offset).limit(limit))
+        db.execute(
+            stmt.order_by(Citizen.registered_at.desc()).offset(offset).limit(limit)
+        )
         .scalars()
         .all()
     )
