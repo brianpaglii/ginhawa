@@ -12,7 +12,9 @@ import {
   type Page,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { AuditEmptyIcon, EmptyState } from "../components/EmptyState";
 import { Pagination } from "../components/Pagination";
+import { SkeletonTable } from "../components/Skeleton";
 import styles from "./AuditLogPage.module.css";
 
 const PAGE_SIZE = 50;
@@ -286,13 +288,6 @@ function renderTable(
   expandedIds: Set<number>,
   toggleExpanded: (id: number) => void,
 ) {
-  if (query.isPending) {
-    return (
-      <div role="status" aria-live="polite">
-        Loading…
-      </div>
-    );
-  }
   if (query.isError) {
     return (
       <div role="alert" className={styles.error}>
@@ -300,15 +295,21 @@ function renderTable(
       </div>
     );
   }
-  const data = query.data;
-  if (data.items.length === 0) {
+  if (query.isPending) {
+    return <SkeletonTable columns={5} rows={6} />;
+  }
+  if (query.data.items.length === 0) {
     return (
-      <div className={styles.empty}>No audit entries match your filters.</div>
+      <EmptyState
+        icon={AuditEmptyIcon}
+        title="No audit entries match your filters"
+        message="Try widening the date range or clearing the filters above."
+      />
     );
   }
   return (
     <div className={styles.tableWrap}>
-      <table className={styles.table}>
+      <table className={`${styles.table} responsive-table`}>
         <thead>
           <tr>
             <th scope="col">Timestamp</th>
@@ -319,7 +320,7 @@ function renderTable(
           </tr>
         </thead>
         <tbody>
-          {data.items.map((entry) => (
+          {query.data.items.map((entry) => (
             <Row
               key={entry.id}
               entry={entry}
@@ -344,16 +345,20 @@ function Row({
 }) {
   return (
     <tr>
-      <td>{formatTimestampWithSeconds(entry.timestamp)}</td>
-      <td className={styles.actor}>
+      <td data-label="Timestamp">
+        {formatTimestampWithSeconds(entry.timestamp)}
+      </td>
+      <td data-label="Actor" className={styles.actor}>
         <span className={styles.actorType}>{entry.actor_type}</span>
         {entry.actor_id && (
           <span className={styles.actorId}>{shortId(entry.actor_id)}</span>
         )}
       </td>
-      <td className={styles.action}>{entry.action}</td>
-      <td>{renderObjectCell(entry)}</td>
-      <td className={styles.detailsCell}>
+      <td data-label="Action" className={styles.action}>
+        {entry.action}
+      </td>
+      <td data-label="Object">{renderObjectCell(entry)}</td>
+      <td data-label="Details" className={styles.detailsCell}>
         <DetailsCell
           details={entry.details}
           expanded={expanded}

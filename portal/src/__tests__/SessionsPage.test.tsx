@@ -143,7 +143,9 @@ describe("SessionsPage", () => {
 
     renderWithProviders(<SessionsPage />);
 
-    expect(await screen.findByText("No sessions yet.")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "No sessions yet" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Next" }),

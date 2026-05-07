@@ -10,10 +10,14 @@ import {
   type Page,
   type SessionRead,
 } from "../api/client";
+import { EmptyState, SessionsEmptyIcon } from "../components/EmptyState";
 import { Pagination } from "../components/Pagination";
+import { SkeletonTable } from "../components/Skeleton";
 import { StatusPill } from "../components/StatusPill";
 import { formatDateTime } from "../lib/datetime";
 import styles from "./SessionsPage.module.css";
+
+const TABLE_COLUMNS = 5;
 
 const PAGE_SIZE = 20;
 
@@ -49,14 +53,6 @@ export function SessionsPage() {
     citizensById.set(c.id, c);
   }
 
-  if (sessionsQuery.isPending) {
-    return (
-      <div role="status" aria-live="polite">
-        Loading…
-      </div>
-    );
-  }
-
   if (sessionsQuery.isError) {
     return (
       <div role="alert" className={styles.error}>
@@ -65,6 +61,7 @@ export function SessionsPage() {
     );
   }
 
+  const isLoading = sessionsQuery.isPending;
   const data = sessionsQuery.data;
 
   return (
@@ -78,11 +75,17 @@ export function SessionsPage() {
         </div>
       </header>
 
-      {data.items.length === 0 ? (
-        <div className={styles.empty}>No sessions yet.</div>
+      {isLoading ? (
+        <SkeletonTable columns={TABLE_COLUMNS} rows={6} />
+      ) : data!.items.length === 0 ? (
+        <EmptyState
+          icon={SessionsEmptyIcon}
+          title="No sessions yet"
+          message="Sessions appear here as kiosks sync. Citizens scanning their RFID at a kiosk will create entries automatically."
+        />
       ) : (
         <div className={styles.tableWrap}>
-          <table className={styles.table}>
+          <table className={`${styles.table} responsive-table`}>
             <thead>
               <tr>
                 <th scope="col">Started</th>
@@ -93,7 +96,7 @@ export function SessionsPage() {
               </tr>
             </thead>
             <tbody>
-              {data.items.map((session) => {
+              {data!.items.map((session) => {
                 const citizen = citizensById.get(session.citizen_id);
                 const citizenLabel =
                   citizen?.full_name ||
@@ -112,13 +115,17 @@ export function SessionsPage() {
                     tabIndex={0}
                     aria-label={`Open session ${shortId(session.id)} for ${citizenLabel}`}
                   >
-                    <td>{formatDateTime(session.started_at)}</td>
-                    <td>{citizenLabel}</td>
-                    <td>
+                    <td data-label="Started">
+                      {formatDateTime(session.started_at)}
+                    </td>
+                    <td data-label="Citizen">{citizenLabel}</td>
+                    <td data-label="Status">
                       <StatusPill status={session.status} />
                     </td>
-                    <td>{session.measurement_path ?? "—"}</td>
-                    <td>{session.measurement_count}</td>
+                    <td data-label="Path">{session.measurement_path ?? "—"}</td>
+                    <td data-label="Measurements">
+                      {session.measurement_count}
+                    </td>
                   </tr>
                 );
               })}
@@ -127,14 +134,16 @@ export function SessionsPage() {
         </div>
       )}
 
-      <Pagination
-        page={page}
-        pageSize={PAGE_SIZE}
-        total={data.total}
-        shown={data.items.length}
-        busy={sessionsQuery.isFetching}
-        onPageChange={setPage}
-      />
+      {!isLoading && (
+        <Pagination
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={data!.total}
+          shown={data!.items.length}
+          busy={sessionsQuery.isFetching}
+          onPageChange={setPage}
+        />
+      )}
     </section>
   );
 }

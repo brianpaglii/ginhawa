@@ -7,13 +7,16 @@ import {
   type CitizenRead,
   type Sex,
 } from "../api/client";
+import { CitizensEmptyIcon, EmptyState } from "../components/EmptyState";
 import { Pagination } from "../components/Pagination";
+import { SkeletonTable } from "../components/Skeleton";
 import { useCitizenList } from "../hooks/useCitizens";
 import { formatDateTime } from "../lib/datetime";
 import { computeAge } from "../utils/age";
 import styles from "./CitizensPage.module.css";
 
 const PAGE_SIZE = 20;
+const TABLE_COLUMNS = 6;
 
 const SEX_LABELS: Record<Sex, string> = {
   M: "Male",
@@ -78,14 +81,6 @@ export function CitizensPage() {
     );
   }
 
-  if (query.isPending) {
-    return (
-      <div role="status" aria-live="polite">
-        Loading…
-      </div>
-    );
-  }
-
   if (query.isError) {
     return (
       <div role="alert" className={styles.error}>
@@ -94,6 +89,7 @@ export function CitizensPage() {
     );
   }
 
+  const isLoading = query.isPending;
   const data = query.data;
 
   return (
@@ -120,15 +116,23 @@ export function CitizensPage() {
         </div>
       </header>
 
-      {visibleRows.length === 0 ? (
-        <div className={styles.empty}>
-          {debouncedSearch
-            ? `No citizens matching “${debouncedSearch}”.`
-            : "No citizens yet."}
-        </div>
+      {isLoading ? (
+        <SkeletonTable columns={TABLE_COLUMNS} rows={6} />
+      ) : visibleRows.length === 0 ? (
+        debouncedSearch ? (
+          <div className={styles.empty}>
+            No citizens matching “{debouncedSearch}”.
+          </div>
+        ) : (
+          <EmptyState
+            icon={CitizensEmptyIcon}
+            title="No citizens registered yet"
+            message="Citizens appear here as they register at a kiosk or are added by a barangay health worker."
+          />
+        )
       ) : (
         <div className={styles.tableWrap}>
-          <table className={styles.table}>
+          <table className={`${styles.table} responsive-table`}>
             <thead>
               <tr>
                 <SortableTh
@@ -163,12 +167,14 @@ export function CitizensPage() {
                   tabIndex={0}
                   aria-label={`Open citizen ${c.full_name}`}
                 >
-                  <td>{c.full_name}</td>
-                  <td>{computeAge(c.dob)} years</td>
-                  <td>{SEX_LABELS[c.sex] ?? c.sex}</td>
-                  <td>{c.barangay}</td>
-                  <td>{formatDateTime(c.registered_at)}</td>
-                  <td>
+                  <td data-label="Name">{c.full_name}</td>
+                  <td data-label="Age">{computeAge(c.dob)} years</td>
+                  <td data-label="Sex">{SEX_LABELS[c.sex] ?? c.sex}</td>
+                  <td data-label="Barangay">{c.barangay}</td>
+                  <td data-label="Registered">
+                    {formatDateTime(c.registered_at)}
+                  </td>
+                  <td data-label="Status">
                     <span
                       className={`${styles.statusBadge} ${
                         c.is_active === 1
@@ -186,14 +192,16 @@ export function CitizensPage() {
         </div>
       )}
 
-      <Pagination
-        page={page}
-        pageSize={PAGE_SIZE}
-        total={data.total}
-        shown={data.items.length}
-        busy={query.isFetching}
-        onPageChange={setPage}
-      />
+      {!isLoading && (
+        <Pagination
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={data!.total}
+          shown={data!.items.length}
+          busy={query.isFetching}
+          onPageChange={setPage}
+        />
+      )}
     </section>
   );
 }

@@ -13,6 +13,7 @@ import {
   type SessionRead,
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { SkeletonCard } from "../components/Skeleton";
 import { StatusPill } from "../components/StatusPill";
 import { formatDateTime, formatDuration } from "../lib/datetime";
 import styles from "./SessionDetailPage.module.css";
@@ -148,11 +149,7 @@ function SessionHeader({
   citizenQuery: ReturnType<typeof useQuery<CitizenRead, unknown>>;
 }) {
   if (sessionQuery.isPending) {
-    return (
-      <section className={styles.section} aria-busy="true">
-        Loading session…
-      </section>
-    );
+    return <SkeletonCard fields={8} />;
   }
   if (sessionQuery.isError) {
     return (
@@ -255,7 +252,7 @@ function Measurements({
   return (
     <section className={styles.section}>
       <h2 className={styles.sectionHeader}>Measurements</h2>
-      <table className={styles.table}>
+      <table className={`${styles.table} responsive-table`}>
         <thead>
           <tr>
             <th scope="col">Type</th>
@@ -268,11 +265,11 @@ function Measurements({
         <tbody>
           {merged.map((m) => (
             <tr key={m.id}>
-              <td>{prettyType(m.type)}</td>
-              <td>
+              <td data-label="Type">{prettyType(m.type)}</td>
+              <td data-label="Value">
                 {m.value} {m.unit}
               </td>
-              <td>
+              <td data-label="Valid">
                 {m.is_valid === 1 ? (
                   <span
                     className={styles.validIcon}
@@ -292,8 +289,8 @@ function Measurements({
                   <div className={styles.invalidNote}>{m.validation_notes}</div>
                 )}
               </td>
-              <td>{formatDateTime(m.measured_at)}</td>
-              <td>{m.source_device}</td>
+              <td data-label="Measured">{formatDateTime(m.measured_at)}</td>
+              <td data-label="Source">{m.source_device}</td>
             </tr>
           ))}
         </tbody>

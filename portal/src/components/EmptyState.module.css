@@ -1,0 +1,28 @@
+.shell {
+  padding: 3rem 1.5rem;
+  text-align: center;
+  background: var(--color-surface);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-muted);
+}
+
+.icon {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 1rem;
+  color: var(--color-text-muted);
+}
+
+.title {
+  margin: 0 0 0.35rem;
+  font-size: 1.05rem;
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.message {
+  margin: 0;
+  max-width: 36rem;
+  display: inline-block;
+}

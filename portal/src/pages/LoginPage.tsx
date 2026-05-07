@@ -31,7 +31,12 @@ export function LoginPage() {
   return (
     <div className={styles.page}>
       <form className={styles.card} onSubmit={onSubmit} noValidate>
-        <h1 className={styles.title}>GINHAWA</h1>
+        <div className={styles.brand}>
+          <span className={styles.brandMark} aria-hidden>
+            G
+          </span>
+          <h1 className={styles.title}>GINHAWA</h1>
+        </div>
         <p className={styles.subtitle}>BHW portal sign-in</p>
 
         {error !== null && (

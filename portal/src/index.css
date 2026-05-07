@@ -1,4 +1,51 @@
+/* ---------------------------------------------------------------
+   Color tokens — single source of truth for theme colors. New code
+   should reference these via var(--color-*) instead of hardcoded
+   hex values. Existing module CSS still has hex literals; those
+   match these tokens by construction so re-skinning later is a
+   token swap, not a global find/replace.
+--------------------------------------------------------------- */
 :root {
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-bg: #dbeafe;
+  --color-primary-fg: #1e3a8a;
+
+  --color-success: #047857;
+  --color-success-bg: #d1fae5;
+  --color-success-fg: #065f46;
+
+  --color-warning: #92400e;
+  --color-warning-bg: #fef3c7;
+  --color-warning-fg: #92400e;
+
+  --color-danger: #b91c1c;
+  --color-danger-bg: #fee2e2;
+  --color-danger-fg: #991b1b;
+  --color-danger-border: #fca5a5;
+
+  --color-text: #111827;
+  --color-text-secondary: #374151;
+  --color-text-muted: #6b7280;
+
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f9fafb;
+  --color-hover: #f3f4f6;
+
+  --color-border: #d8dde3;
+  --color-border-subtle: #e5e7eb;
+  --color-border-input: #d1d5db;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
   font-family:
     system-ui,
     -apple-system,
@@ -8,8 +55,8 @@
     Arial,
     sans-serif;
   line-height: 1.5;
-  color: #111827;
-  background: #f6f7f9;
+  color: var(--color-text);
+  background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -29,7 +76,7 @@ body,
 }
 
 a {
-  color: #2563eb;
+  color: var(--color-primary);
   text-decoration: none;
 }
 
@@ -44,5 +91,59 @@ button {
 h1,
 h2,
 h3 {
-  color: #1f2937;
+  color: var(--color-text);
+}
+
+/* Visible focus ring on every interactive element. Keyboard users
+   need to see what's focused; default browser outlines are
+   inconsistent. */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ---------------------------------------------------------------
+   Responsive table primitive. Tables that opt in by adding the
+   `responsive-table` class collapse to card-style rows on screens
+   < 768px. Each <td> needs a data-label attribute so the column
+   header can be rendered as a pseudo-element in mobile mode.
+--------------------------------------------------------------- */
+@media (max-width: 768px) {
+  table.responsive-table {
+    display: block;
+  }
+  table.responsive-table thead {
+    display: none;
+  }
+  table.responsive-table tbody {
+    display: block;
+  }
+  table.responsive-table tr {
+    display: block;
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 1rem;
+    background: var(--color-surface);
+  }
+  table.responsive-table td {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.3rem 0;
+    border-bottom: none;
+  }
+  table.responsive-table td::before {
+    content: attr(data-label);
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 500;
+    flex: 0 0 8rem;
+  }
+  table.responsive-table td:last-child {
+    border-bottom: none;
+  }
 }

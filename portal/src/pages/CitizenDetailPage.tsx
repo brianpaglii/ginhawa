@@ -9,6 +9,7 @@ import {
   type Sex,
 } from "../api/client";
 import { Pagination } from "../components/Pagination";
+import { SkeletonCard } from "../components/Skeleton";
 import { StatusPill } from "../components/StatusPill";
 import { useCitizen, useCitizenSessions } from "../hooks/useCitizens";
 import { formatDateTime } from "../lib/datetime";
@@ -89,11 +90,7 @@ function CitizenDetailBody({ citizenId, citizenQuery }: BodyProps) {
 
 function Header({ query }: { query: ReturnType<typeof useCitizen> }) {
   if (query.isPending) {
-    return (
-      <section className={styles.section} aria-busy="true">
-        Loading citizen…
-      </section>
-    );
+    return <SkeletonCard fields={6} />;
   }
   if (query.isError) {
     return (
@@ -219,7 +216,7 @@ function SessionsSection({
   return (
     <section className={styles.section}>
       <h2 className={styles.sectionHeader}>Sessions</h2>
-      <table className={styles.table}>
+      <table className={`${styles.table} responsive-table`}>
         <thead>
           <tr>
             <th scope="col">Started</th>
@@ -270,13 +267,13 @@ function Row({
       tabIndex={0}
       aria-label={`Open session started ${formatDateTime(session.started_at)}`}
     >
-      <td>{formatDateTime(session.started_at)}</td>
-      <td>{formatDateTime(session.ended_at)}</td>
-      <td>
+      <td data-label="Started">{formatDateTime(session.started_at)}</td>
+      <td data-label="Ended">{formatDateTime(session.ended_at)}</td>
+      <td data-label="Status">
         <StatusPill status={session.status} />
       </td>
-      <td>{session.measurement_path ?? "—"}</td>
-      <td>{session.measurement_count}</td>
+      <td data-label="Path">{session.measurement_path ?? "—"}</td>
+      <td data-label="Measurements">{session.measurement_count}</td>
     </tr>
   );
 }
