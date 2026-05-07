@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session as SAOrmSession
 
 from ..core.security import require_scope
-from ..db.models import Citizen, User
+from ..db.models import Citizen, Measurement, User
 from ..db.models import Session as SessionModel
 from ..db.session import get_db
 from ..services.audit import record_audit
@@ -20,6 +20,26 @@ from .schemas import (
     SessionStatus,
     SessionUpdate,
 )
+
+
+def _count_measurements_for(db: SAOrmSession, session_ids: list[str]) -> dict[str, int]:
+    """Return a session_id → valid-measurement-count map.
+
+    One round-trip aggregation across the page's session IDs, used by
+    the BHW portal's session list to render per-row counts without an
+    N+1. Sessions absent from the result map have zero (valid)
+    measurements; callers default to 0.
+    """
+    if not session_ids:
+        return {}
+    rows = db.execute(
+        select(Measurement.session_id, func.count(Measurement.id))
+        .where(Measurement.session_id.in_(session_ids))
+        .where(Measurement.is_valid == 1)
+        .group_by(Measurement.session_id)
+    ).all()
+    return {sid: count for sid, count in rows}
+
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
@@ -99,7 +119,7 @@ def get_session(
     session_id: str,
     current_user: User = Depends(require_scope("sessions:read")),
     db: SAOrmSession = Depends(get_db),
-) -> SessionModel:
+) -> SessionRead:
     session = db.get(SessionModel, session_id)
     if session is None:
         raise HTTPException(
@@ -116,7 +136,10 @@ def get_session(
         object_id=session_id,
     )
     db.commit()
-    return session
+    counts = _count_measurements_for(db, [session.id])
+    return SessionRead.model_validate(session).model_copy(
+        update={"measurement_count": counts.get(session.id, 0)}
+    )
 
 
 @router.get("", response_model=Page[SessionRead])
@@ -174,11 +197,20 @@ def list_sessions(
         ).where(Citizen.barangay == barangay)
 
     total = db.execute(count_stmt).scalar_one()
+    # Newest first — the BHW portal's primary list view ("recent
+    # sessions") wants the most recent measurements at the top of page
+    # 1. Server-side ordering is the only place this is meaningful;
+    # the client could only re-sort the current page, which would
+    # produce a wrong "newest first" pagination across pages.
     rows = (
-        db.execute(stmt.order_by(SessionModel.started_at).offset(offset).limit(limit))
+        db.execute(
+            stmt.order_by(SessionModel.started_at.desc()).offset(offset).limit(limit)
+        )
         .scalars()
         .all()
     )
+
+    counts = _count_measurements_for(db, [r.id for r in rows])
 
     record_audit(
         db,
@@ -200,7 +232,12 @@ def list_sessions(
     db.commit()
 
     return Page[SessionRead](
-        items=[SessionRead.model_validate(r) for r in rows],
+        items=[
+            SessionRead.model_validate(r).model_copy(
+                update={"measurement_count": counts.get(r.id, 0)}
+            )
+            for r in rows
+        ],
         total=total,
     )
 

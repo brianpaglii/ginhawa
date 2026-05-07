@@ -181,6 +181,13 @@ class SessionRead(BaseModel):
     printed_status: PrintedStatus
     synced: int
     updated_at: str
+    # Aggregated count of (valid) measurements rolled up by the
+    # session-list endpoint so the BHW portal can render per-row counts
+    # without an N+1 round trip. Defaults to 0 so other code paths that
+    # construct a SessionRead from a bare Session ORM row (e.g.,
+    # response_model coercion in PATCH /{id}) don't break — those paths
+    # don't show counts, and 0 is the safe sentinel.
+    measurement_count: int = 0
 
 
 # ---------------------------------------------------------------------------
