@@ -26,7 +26,6 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo): void {
     // No remote logging service yet; console.error is the agreed
     // local trace surface for v1.
-    // eslint-disable-next-line no-console
     console.error(
       "ErrorBoundary caught a render error:",
       error,

@@ -124,7 +124,13 @@ export function SessionsPage() {
     queryFn: () => apiClient.listCitizens({ limit: 200, is_active: true }),
     staleTime: CITIZENS_STALE_MS,
   });
-  const allCitizens = citizensQuery.data?.items ?? [];
+  // Memoise the unwrap so the [] fallback identity is stable across
+  // renders — otherwise downstream useMemo dependencies (citizensById,
+  // autocomplete matches) thrash on every render.
+  const allCitizens = useMemo<CitizenRead[]>(
+    () => citizensQuery.data?.items ?? [],
+    [citizensQuery.data?.items],
+  );
   const citizensById = useMemo(() => {
     const map = new Map<string, CitizenRead>();
     for (const c of allCitizens) map.set(c.id, c);

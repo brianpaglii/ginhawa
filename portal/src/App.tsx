@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
-import { useAuth } from "./auth/AuthContext";
+import { useAuth } from "./auth/use-auth";
 import { AppLayout } from "./layouts/AppLayout";
 import { AuditLogPage } from "./pages/AuditLogPage";
 import { CitizenDetailPage } from "./pages/CitizenDetailPage";

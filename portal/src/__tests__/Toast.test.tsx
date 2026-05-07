@@ -1,7 +1,8 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ToastProvider, useToast } from "../components/Toast";
+import { ToastProvider } from "../components/Toast";
+import { useToast } from "../components/use-toast";
 
 function Trigger({
   variant,

@@ -1,19 +1,22 @@
-import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useState } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
-import { useAuth } from "../auth/AuthContext";
-import { useToast } from "../components/Toast";
+import { useAuth } from "../auth/use-auth";
+import { useToast } from "../components/use-toast";
 import styles from "./AppLayout.module.css";
 
 export function AppLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
   const toast = useToast();
   const [loggingOut, setLoggingOut] = useState(false);
   // Mobile-only: the sidebar is hidden by default at < 768px; the
-  // hamburger button toggles it. Closing on every route change so a
-  // tap on a nav link doesn't leave the panel obscuring the page.
+  // hamburger button toggles it. The panel closes on the link
+  // click handlers below rather than via a route-change effect.
+  // (Effect-driven setState got flagged by react-hooks/set-state-
+  // in-effect because navigation isn't an external system — it's
+  // already React state in disguise — so the closure is best
+  // colocated with the user action that causes it.)
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const isAdmin = user?.role === "admin";
 
@@ -34,11 +37,9 @@ export function AppLayout() {
     }
   }
 
-  // Collapse mobile nav whenever the URL changes — a tap on a nav
-  // link shouldn't leave the panel obscuring the destination.
-  useEffect(() => {
+  function closeMobileNav() {
     setMobileNavOpen(false);
-  }, [location.pathname]);
+  }
 
   return (
     <div className={styles.shell}>
@@ -93,6 +94,7 @@ export function AppLayout() {
             <li>
               <NavLink
                 to="/sessions"
+                onClick={closeMobileNav}
                 className={({ isActive }) =>
                   isActive
                     ? `${styles.navLink} ${styles.navLinkActive}`
@@ -105,6 +107,7 @@ export function AppLayout() {
             <li>
               <NavLink
                 to="/citizens"
+                onClick={closeMobileNav}
                 className={({ isActive }) =>
                   isActive
                     ? `${styles.navLink} ${styles.navLinkActive}`
@@ -118,6 +121,7 @@ export function AppLayout() {
               <li>
                 <NavLink
                   to="/audit-log"
+                  onClick={closeMobileNav}
                   className={({ isActive }) =>
                     isActive
                       ? `${styles.navLink} ${styles.navLinkActive}`

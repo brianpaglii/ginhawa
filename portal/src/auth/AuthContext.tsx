@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useState,
@@ -9,19 +7,11 @@ import {
 } from "react";
 
 import { ApiError, apiClient, readToken, type UserRead } from "../api/client";
-
-export type AuthStatus = "unauthenticated" | "authenticating" | "authenticated";
-
-export interface AuthContextValue {
-  user: UserRead | null;
-  status: AuthStatus;
-  login: (username: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
-}
-
-// Exported for tests: tests render <AuthContext.Provider value={...}> with
-// a mocked value rather than spinning up the real provider's effects.
-export const AuthContext = createContext<AuthContextValue | null>(null);
+import {
+  AuthContext,
+  type AuthContextValue,
+  type AuthStatus,
+} from "./auth-context";
 
 interface AuthProviderProps {
   children: ReactNode;
@@ -97,12 +87,4 @@ export function AuthProvider({ children }: AuthProviderProps) {
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth(): AuthContextValue {
-  const ctx = useContext(AuthContext);
-  if (ctx === null) {
-    throw new Error("useAuth must be used within an <AuthProvider>");
-  }
-  return ctx;
 }

@@ -11,7 +11,7 @@ import {
   type ListAuditLogParams,
   type Page,
 } from "../api/client";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth } from "../auth/use-auth";
 import { AuditEmptyIcon, EmptyState } from "../components/EmptyState";
 import { Pagination } from "../components/Pagination";
 import { SkeletonTable } from "../components/Skeleton";
@@ -102,9 +102,20 @@ function AuditLogBody() {
       debouncedActionPrefix,
     ],
   );
-  useEffect(() => {
+  // Reset to page 0 whenever the filter signature changes. This is
+  // the "adjusting state during render" pattern from the React docs
+  // (https://react.dev/reference/react/useState#storing-information-from-previous-renders).
+  // We use useState for the "prev" value rather than useRef because
+  // the project's lint config disallows ref access during render and
+  // because the React docs example uses useState. An effect-driven
+  // reset would trip react-hooks/set-state-in-effect — pagination
+  // state is React state, not an external system.
+  const [prevFilterSignature, setPrevFilterSignature] =
+    useState(filterSignature);
+  if (prevFilterSignature !== filterSignature) {
+    setPrevFilterSignature(filterSignature);
     setPage(0);
-  }, [filterSignature]);
+  }
 
   const queryParams = useMemo<ListAuditLogParams>(() => {
     const params: ListAuditLogParams = {
@@ -166,12 +177,15 @@ function AuditLogBody() {
             id="audit-actor-type"
             className={styles.filterSelect}
             value={filters.actorType}
-            onChange={(e) =>
-              setFilters((f) => ({
-                ...f,
-                actorType: e.currentTarget.value as ActorType | "",
-              }))
-            }
+            onChange={(e) => {
+              // Capture the value out of the event before the
+              // functional setter runs — React nulls
+              // `currentTarget` after the handler returns, and the
+              // adjust-state-during-render reset (above) can cause
+              // the setter to execute on a later tick.
+              const value = e.currentTarget.value as ActorType | "";
+              setFilters((f) => ({ ...f, actorType: value }));
+            }}
           >
             <option value="">All</option>
             {ACTOR_TYPES.map((t) => (
@@ -192,12 +206,10 @@ function AuditLogBody() {
             className={styles.filterInput}
             placeholder="e.g. fsm."
             value={filters.actionPrefix}
-            onChange={(e) =>
-              setFilters((f) => ({
-                ...f,
-                actionPrefix: e.currentTarget.value,
-              }))
-            }
+            onChange={(e) => {
+              const value = e.currentTarget.value;
+              setFilters((f) => ({ ...f, actionPrefix: value }));
+            }}
           />
         </div>
 
@@ -209,12 +221,10 @@ function AuditLogBody() {
             id="audit-object-type"
             className={styles.filterSelect}
             value={filters.objectType}
-            onChange={(e) =>
-              setFilters((f) => ({
-                ...f,
-                objectType: e.currentTarget.value,
-              }))
-            }
+            onChange={(e) => {
+              const value = e.currentTarget.value;
+              setFilters((f) => ({ ...f, objectType: value }));
+            }}
           >
             <option value="">All</option>
             {OBJECT_TYPES.map((t) => (
@@ -234,9 +244,10 @@ function AuditLogBody() {
             type="date"
             className={styles.filterInput}
             value={filters.fromDate}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, fromDate: e.currentTarget.value }))
-            }
+            onChange={(e) => {
+              const value = e.currentTarget.value;
+              setFilters((f) => ({ ...f, fromDate: value }));
+            }}
           />
         </div>
 
@@ -249,9 +260,10 @@ function AuditLogBody() {
             type="date"
             className={styles.filterInput}
             value={filters.toDate}
-            onChange={(e) =>
-              setFilters((f) => ({ ...f, toDate: e.currentTarget.value }))
-            }
+            onChange={(e) => {
+              const value = e.currentTarget.value;
+              setFilters((f) => ({ ...f, toDate: value }));
+            }}
           />
         </div>
 

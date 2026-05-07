@@ -1,7 +1,5 @@
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -9,9 +7,13 @@ import {
   type ReactNode,
 } from "react";
 
+import {
+  ToastContext,
+  type ToastApi,
+  type ToastOptions,
+  type ToastVariant,
+} from "./toast-context";
 import styles from "./Toast.module.css";
-
-type ToastVariant = "error" | "success" | "info";
 
 interface Toast {
   id: number;
@@ -20,25 +22,7 @@ interface Toast {
   message?: string;
 }
 
-interface ToastOptions {
-  title: string;
-  message?: string;
-}
-
-interface ToastApi {
-  toast: (variant: ToastVariant, opts: ToastOptions) => void;
-  error: (opts: ToastOptions) => void;
-  success: (opts: ToastOptions) => void;
-  info: (opts: ToastOptions) => void;
-  dismiss: (id: number) => void;
-}
-
 const DEFAULT_AUTO_DISMISS_MS = 5000;
-
-// Exported for tests: a test can wrap the unit under test in a
-// ToastContext.Provider with a synchronous mock value if it doesn't
-// want to drive the real timer-based provider.
-export const ToastContext = createContext<ToastApi | null>(null);
 
 interface ProviderProps {
   children: ReactNode;
@@ -166,12 +150,4 @@ function ToastIcon({ variant }: { variant: ToastVariant }) {
       {path}
     </svg>
   );
-}
-
-export function useToast(): ToastApi {
-  const ctx = useContext(ToastContext);
-  if (ctx === null) {
-    throw new Error("useToast must be used within a <ToastProvider>");
-  }
-  return ctx;
 }

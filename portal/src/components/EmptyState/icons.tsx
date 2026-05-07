@@ -1,32 +1,8 @@
-import type { ReactNode } from "react";
-
-import styles from "./EmptyState.module.css";
-
-interface Props {
-  icon: ReactNode;
-  title: string;
-  message: string;
-}
-
-// Shared "nothing to show here" panel for list pages. Inline-SVG
-// icon (no icon library), short title, and a one-sentence
-// explanation of what would populate this list. Pages compose the
-// icon themselves so each list can have a distinct shape.
-export function EmptyState({ icon, title, message }: Props) {
-  return (
-    <div className={styles.shell}>
-      <div className={styles.icon} aria-hidden>
-        {icon}
-      </div>
-      <h2 className={styles.title}>{title}</h2>
-      <p className={styles.message}>{message}</p>
-    </div>
-  );
-}
-
-// A small library of inline-SVG icons used by the empty states. The
-// SVGs follow the lucide.dev visual language (24px viewBox, 2px
-// stroke, round caps) so adding a real icon set later swaps cleanly.
+// Inline-SVG icons used by the empty-state panels. Kept separate
+// from EmptyState.tsx so that file's react-refresh surface stays a
+// single component export. The SVGs follow the lucide.dev visual
+// language (24px viewBox, 2px stroke, round caps) so adding a real
+// icon set later swaps cleanly.
 
 export const SessionsEmptyIcon = (
   <svg

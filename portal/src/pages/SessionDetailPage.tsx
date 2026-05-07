@@ -12,7 +12,7 @@ import {
   type Page,
   type SessionRead,
 } from "../api/client";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth } from "../auth/use-auth";
 import { SkeletonCard } from "../components/Skeleton";
 import { StatusPill } from "../components/StatusPill";
 import { formatDateTime, formatDuration } from "../lib/datetime";
