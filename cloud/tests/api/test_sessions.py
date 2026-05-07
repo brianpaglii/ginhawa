@@ -94,6 +94,33 @@ def test_list_sessions_filters_by_citizen(client: TestClient) -> None:
     assert all(item["citizen_id"] == a for item in body["items"])
 
 
+def test_list_sessions_sort_dir_asc_returns_oldest_first(
+    client: TestClient,
+) -> None:
+    """The portal's "Started" column-header toggle relies on this."""
+    citizen_id = _make_citizen(client, rfid="SORT-1")
+    # Three sessions back-to-back; started_at uniqueness comes from
+    # the server-issued ISO timestamp at create.
+    s1 = client.post(
+        "/api/v1/sessions", json={"citizen_id": citizen_id, "device_id": "k"}
+    ).json()["id"]
+    s2 = client.post(
+        "/api/v1/sessions", json={"citizen_id": citizen_id, "device_id": "k"}
+    ).json()["id"]
+    s3 = client.post(
+        "/api/v1/sessions", json={"citizen_id": citizen_id, "device_id": "k"}
+    ).json()["id"]
+
+    desc = client.get("/api/v1/sessions", params={"citizen_id": citizen_id}).json()
+    assert [item["id"] for item in desc["items"]] == [s3, s2, s1]
+
+    asc = client.get(
+        "/api/v1/sessions",
+        params={"citizen_id": citizen_id, "sort_dir": "asc"},
+    ).json()
+    assert [item["id"] for item in asc["items"]] == [s1, s2, s3]
+
+
 def test_list_sessions_filters_by_barangay(client: TestClient) -> None:
     a = _make_citizen(client, rfid="A", barangay="Tibagan")
     b = _make_citizen(client, rfid="B", barangay="Pinaglabanan")

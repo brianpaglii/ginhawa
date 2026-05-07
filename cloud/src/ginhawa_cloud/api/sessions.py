@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -151,6 +152,7 @@ def list_sessions(
     started_after: str | None = Query(default=None),
     started_before: str | None = Query(default=None),
     barangay: str | None = Query(default=None),
+    sort_dir: Literal["asc", "desc"] = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> Page[SessionRead]:
@@ -197,15 +199,18 @@ def list_sessions(
         ).where(Citizen.barangay == barangay)
 
     total = db.execute(count_stmt).scalar_one()
-    # Newest first — the BHW portal's primary list view ("recent
+    # Default DESC — the BHW portal's primary list view ("recent
     # sessions") wants the most recent measurements at the top of page
-    # 1. Server-side ordering is the only place this is meaningful;
-    # the client could only re-sort the current page, which would
-    # produce a wrong "newest first" pagination across pages.
+    # 1. The portal's column-header toggle on "Started" can flip this
+    # to ASC for "oldest first" investigation; client-side sort
+    # wouldn't preserve order across pages so we expose it here.
+    order_clause = (
+        SessionModel.started_at.asc()
+        if sort_dir == "asc"
+        else SessionModel.started_at.desc()
+    )
     rows = (
-        db.execute(
-            stmt.order_by(SessionModel.started_at.desc()).offset(offset).limit(limit)
-        )
+        db.execute(stmt.order_by(order_clause).offset(offset).limit(limit))
         .scalars()
         .all()
     )
