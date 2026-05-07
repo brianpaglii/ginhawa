@@ -93,6 +93,9 @@ export interface SessionRead {
   printed_status: PrintedStatus;
   synced: number;
   updated_at: string;
+  // Aggregated count rolled up server-side so the BHW portal renders
+  // per-row counts without an N+1.
+  measurement_count: number;
 }
 
 export interface MeasurementRead {

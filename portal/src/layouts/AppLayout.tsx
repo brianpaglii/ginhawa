@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
 import styles from "./AppLayout.module.css";
@@ -36,9 +36,27 @@ export function AppLayout() {
           {loggingOut ? "Logging out…" : "Log out"}
         </button>
       </header>
-      <main className={styles.main}>
-        <Outlet />
-      </main>
+      <div className={styles.body}>
+        <nav className={styles.sidebar} aria-label="Primary">
+          <ul className={styles.navList}>
+            <li>
+              <NavLink
+                to="/sessions"
+                className={({ isActive }) =>
+                  isActive
+                    ? `${styles.navLink} ${styles.navLinkActive}`
+                    : styles.navLink
+                }
+              >
+                Sessions
+              </NavLink>
+            </li>
+          </ul>
+        </nav>
+        <main className={styles.main}>
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

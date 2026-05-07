@@ -2,8 +2,9 @@ import { Navigate, Route, Routes } from "react-router-dom";
 
 import { useAuth } from "./auth/AuthContext";
 import { AppLayout } from "./layouts/AppLayout";
-import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
+import { SessionDetailPage } from "./pages/SessionDetailPage";
+import { SessionsPage } from "./pages/SessionsPage";
 import { ProtectedRoute } from "./routes/ProtectedRoute";
 
 function RootRedirect() {
@@ -17,7 +18,7 @@ function RootRedirect() {
   }
   return (
     <Navigate
-      to={status === "authenticated" ? "/dashboard" : "/login"}
+      to={status === "authenticated" ? "/sessions" : "/login"}
       replace
     />
   );
@@ -30,7 +31,13 @@ function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<ProtectedRoute />}>
         <Route element={<AppLayout />}>
-          <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/sessions" element={<SessionsPage />} />
+          <Route path="/sessions/:id" element={<SessionDetailPage />} />
+          {/* /dashboard preserved as a redirect for any bookmarks */}
+          <Route
+            path="/dashboard"
+            element={<Navigate to="/sessions" replace />}
+          />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
