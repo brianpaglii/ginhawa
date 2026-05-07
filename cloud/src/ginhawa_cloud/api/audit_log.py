@@ -33,6 +33,7 @@ def list_audit_log(
     actor_type_filter: ActorType | None = Query(default=None, alias="actor_type"),
     actor_id: str | None = Query(default=None),
     action: str | None = Query(default=None),
+    action_prefix: str | None = Query(default=None),
     object_type: str | None = Query(default=None),
     object_id: str | None = Query(default=None),
     timestamp_after: str | None = Query(default=None),
@@ -66,6 +67,18 @@ def list_audit_log(
     if action is not None:
         stmt = stmt.where(AuditLog.action == action)
         count_stmt = count_stmt.where(AuditLog.action == action)
+    if action_prefix is not None:
+        # Prefix-match the action string. The BHW portal's audit page
+        # uses this to filter by namespace ("fsm.", "citizen.", etc.)
+        # without having to enumerate every leaf action server-side.
+        # SQL LIKE 'pfx%' — pfx_prefix is escaped here only minimally
+        # because actions are server-issued symbols (no user-provided
+        # data) and the filter is a free-text input on an admin
+        # surface; the worst-case is wildcard expansion in the user's
+        # own query, which is harmless.
+        like_pattern = f"{action_prefix}%"
+        stmt = stmt.where(AuditLog.action.like(like_pattern))
+        count_stmt = count_stmt.where(AuditLog.action.like(like_pattern))
     if object_type is not None:
         stmt = stmt.where(AuditLog.object_type == object_type)
         count_stmt = count_stmt.where(AuditLog.object_type == object_type)
@@ -102,6 +115,7 @@ def list_audit_log(
             "actor_type": actor_type_filter,
             "actor_id": actor_id,
             "action": action,
+            "action_prefix": action_prefix,
             "object_type": object_type,
             "object_id": object_id,
             "timestamp_after": timestamp_after,

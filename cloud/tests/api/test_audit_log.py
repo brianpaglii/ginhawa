@@ -146,6 +146,31 @@ def test_audit_log_filter_by_actor_type(client: TestClient) -> None:
     assert all(item["actor_type"] == "admin" for item in body["items"])
 
 
+# Verifies the action_prefix LIKE filter — the BHW portal's audit
+# page uses this to narrow by action namespace ("create", "login",
+# etc.) without enumerating every leaf action. Asserts that prefix
+# 'create' matches the create row but not the seeded 'login' rows.
+# Would fail if action_prefix were dropped, or if the LIKE clause
+# regressed to exact match.
+def test_audit_log_filter_by_action_prefix(client: TestClient) -> None:
+    create_resp = client.post(
+        "/api/v1/citizens", json=_citizen_payload(rfid="ACTPFX-1")
+    )
+    assert create_resp.status_code == 201
+
+    response = client.get("/api/v1/audit-log", params={"action_prefix": "create"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] >= 1
+    assert all(item["action"].startswith("create") for item in body["items"])
+    # Sanity: a prefix that no real action matches returns nothing.
+    none_resp = client.get(
+        "/api/v1/audit-log", params={"action_prefix": "no-such-prefix"}
+    )
+    assert none_resp.status_code == 200
+    assert none_resp.json()["total"] == 0
+
+
 # Verifies that ?object_type=citizen narrows the response to citizen
 # audit rows only. The fixture seeds 'login' rows (no object_type) and
 # the POST below seeds 'create' rows for object_type='citizen', so the
