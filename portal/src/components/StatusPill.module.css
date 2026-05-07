@@ -1,0 +1,28 @@
+.pill {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.in_progress {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.completed {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.aborted {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.error {
+  background: #7f1d1d;
+  color: #fee2e2;
+}

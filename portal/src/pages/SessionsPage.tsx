@@ -9,8 +9,8 @@ import {
   type CitizenRead,
   type Page,
   type SessionRead,
-  type SessionStatus,
 } from "../api/client";
+import { StatusPill } from "../components/StatusPill";
 import { formatDateTime } from "../lib/datetime";
 import styles from "./SessionsPage.module.css";
 
@@ -19,20 +19,6 @@ const PAGE_SIZE = 20;
 // Citizens change rarely compared to sessions; cache for 5 min so
 // switching session pages doesn't refetch the citizen map.
 const CITIZENS_STALE_MS = 5 * 60_000;
-
-const STATUS_LABELS: Record<SessionStatus, string> = {
-  in_progress: "In progress",
-  completed: "Completed",
-  aborted: "Aborted",
-  error: "Error",
-};
-
-const STATUS_PILL_CLASS: Record<SessionStatus, string> = {
-  in_progress: styles.statusInProgress,
-  completed: styles.statusCompleted,
-  aborted: styles.statusAborted,
-  error: styles.statusError,
-};
 
 export function SessionsPage() {
   const [page, setPage] = useState(0);
@@ -132,11 +118,7 @@ export function SessionsPage() {
                     <td>{formatDateTime(session.started_at)}</td>
                     <td>{citizenLabel}</td>
                     <td>
-                      <span
-                        className={`${styles.statusPill} ${STATUS_PILL_CLASS[session.status]}`}
-                      >
-                        {STATUS_LABELS[session.status]}
-                      </span>
+                      <StatusPill status={session.status} />
                     </td>
                     <td>{session.measurement_path ?? "—"}</td>
                     <td>{session.measurement_count}</td>

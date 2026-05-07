@@ -61,34 +61,6 @@
   border-bottom: none;
 }
 
-.statusPill {
-  display: inline-block;
-  padding: 0.15rem 0.55rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 500;
-}
-
-.statusInProgress {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.statusCompleted {
-  background: #d1fae5;
-  color: #065f46;
-}
-
-.statusAborted {
-  background: #fee2e2;
-  color: #991b1b;
-}
-
-.statusError {
-  background: #fef3c7;
-  color: #92400e;
-}
-
 .empty {
   padding: 3rem 1rem;
   text-align: center;

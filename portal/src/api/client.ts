@@ -288,6 +288,12 @@ class ApiClient {
     });
   }
 
+  getCitizen(id: string): Promise<CitizenRead> {
+    return this.request<CitizenRead>(
+      `/api/v1/citizens/${encodeURIComponent(id)}`,
+    );
+  }
+
   listMeasurements(
     params: ListMeasurementsParams = {},
   ): Promise<Page<MeasurementRead>> {
