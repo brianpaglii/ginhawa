@@ -322,7 +322,7 @@ class KioskMainWindow(QMainWindow):
         self._path_choice_screen.path_selected.connect(self._on_path_selected)
         self._report_screen.print_requested.connect(self._on_print_requested)
         self._report_screen.finish_without_printing_requested.connect(
-            self._fsm.finish_without_printing
+            self._on_finish_without_printing
         )
         # User-gated BP cuff connect — fires BpMeasurementRequested ONLY
         # when the citizen has the cuff in pairing mode and taps the
@@ -518,7 +518,10 @@ class KioskMainWindow(QMainWindow):
         elif state == State.CONSENT:
             self._fsm.timeout()
         elif state == State.REPORT:
-            self._fsm.finish_without_printing()
+            # Route through the user-action handler so the same
+            # commit + rollback semantics apply whether the citizen
+            # walked away or tapped the button explicitly.
+            self._on_finish_without_printing()
         elif state in (State.END, State.ABORTED, State.ERROR):
             self._fsm.acknowledge()
 
@@ -583,7 +586,16 @@ class KioskMainWindow(QMainWindow):
 
     def _on_path_selected(self, path: str) -> None:
         _log.info("main_window.path_selected", path=path)
-        self._fsm.path_selected(path)  # type: ignore[arg-type]
+        try:
+            self._fsm.path_selected(path)  # type: ignore[arg-type]
+            self._db.commit()
+        except Exception as exc:
+            self._db.rollback()
+            _log.warning(
+                "main_window.path_selected_failed",
+                error=type(exc).__name__,
+            )
+            raise
 
     def _on_consent_given(self) -> None:
         _log.info("main_window.consent_given")
@@ -592,9 +604,40 @@ class KioskMainWindow(QMainWindow):
 
     def _on_print_requested(self) -> None:
         # Only fire the FSM transition; the actual print kicks off
-        # in _kick_off_print_job once the FSM lands on PRINTING.
+        # in _kick_off_print_job once the FSM lands on PRINTING. The
+        # FSM's after-callbacks (and the audit row they emit via
+        # services.audit) are flush-only — caller MUST commit for
+        # the row to reach disk.
         _log.info("main_window.print_requested")
-        self._fsm.print_requested()
+        try:
+            self._fsm.print_requested()
+            self._db.commit()
+        except Exception as exc:
+            self._db.rollback()
+            _log.warning(
+                "main_window.print_requested_failed",
+                error=type(exc).__name__,
+            )
+            raise
+
+    def _on_finish_without_printing(self) -> None:
+        # The FSM's _after_finish_without_printing callback marks the
+        # session row 'completed' and stamps ended_at; without an
+        # explicit commit here those mutations stay in the SQLAlchemy
+        # session and never reach the encrypted DB. The 2026-05-07
+        # bench surfaced this as 20 in_progress rows that never
+        # progressed despite reaching the END state on screen.
+        _log.info("main_window.finish_without_printing")
+        try:
+            self._fsm.finish_without_printing()
+            self._db.commit()
+        except Exception as exc:
+            self._db.rollback()
+            _log.warning(
+                "main_window.finish_without_printing_failed",
+                error=type(exc).__name__,
+            )
+            raise
 
     def _on_bp_connect_requested(self) -> None:
         """Citizen pressed "Connect to cuff" on MeasuringVitalsScreen.
@@ -620,14 +663,18 @@ class KioskMainWindow(QMainWindow):
         _log.info("main_window.cancel_requested", from_state=self._fsm.state)
         try:
             self._fsm.cancel()
-        except Exception as exc:  # pragma: no cover - defensive guard
+            self._db.commit()
+        except Exception as exc:
+            self._db.rollback()
             _log.warning("main_window.cancel_invalid", error=type(exc).__name__)
 
     def _on_change_language(self) -> None:
         _log.info("main_window.change_language_requested", from_state=self._fsm.state)
         try:
             self._fsm.change_language()
-        except Exception as exc:  # pragma: no cover - defensive guard
+            self._db.commit()
+        except Exception as exc:
+            self._db.rollback()
             _log.warning(
                 "main_window.change_language_invalid", error=type(exc).__name__
             )
