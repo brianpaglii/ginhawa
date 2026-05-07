@@ -168,6 +168,9 @@ export interface ListAuditLogParams {
   actor_type?: ActorType;
   actor_id?: string;
   action?: string;
+  // Server-side LIKE 'prefix%' on the action column. The BHW portal's
+  // audit page uses this for namespace filtering ("fsm.", "citizen.").
+  action_prefix?: string;
   object_type?: string;
   object_id?: string;
   timestamp_after?: string;

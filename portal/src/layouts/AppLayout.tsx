@@ -8,6 +8,7 @@ export function AppLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [loggingOut, setLoggingOut] = useState(false);
+  const isAdmin = user?.role === "admin";
 
   async function onLogout() {
     setLoggingOut(true);
@@ -63,6 +64,20 @@ export function AppLayout() {
                 Citizens
               </NavLink>
             </li>
+            {isAdmin && (
+              <li>
+                <NavLink
+                  to="/audit-log"
+                  className={({ isActive }) =>
+                    isActive
+                      ? `${styles.navLink} ${styles.navLinkActive}`
+                      : styles.navLink
+                  }
+                >
+                  Audit log
+                </NavLink>
+              </li>
+            )}
           </ul>
         </nav>
         <main className={styles.main}>
