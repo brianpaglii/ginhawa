@@ -1,0 +1,60 @@
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f6f7f9;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid #d8dde3;
+  background: #ffffff;
+}
+
+.brand {
+  font-weight: 600;
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
+  color: #1f2937;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.user {
+  color: #374151;
+  font-size: 0.95rem;
+}
+
+.logoutBtn {
+  appearance: none;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #1f2937;
+  padding: 0.4rem 0.9rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.logoutBtn:hover {
+  background: #f3f4f6;
+}
+
+.logoutBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.main {
+  flex: 1;
+  padding: 1.5rem;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
