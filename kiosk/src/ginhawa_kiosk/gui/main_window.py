@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -46,6 +46,7 @@ from ..fsm import (
     SessionResetForSensors,
     State,
 )
+from ..sensors.base import Sensor
 from ..services.audit import record_audit
 from ..services.printer import PrinterService, PrintResult
 from ..services.validation import validate_measurement
@@ -121,6 +122,55 @@ _MEASUREMENT_LABELS: dict[Language, dict[str, str]] = {
 _VITALS_TYPES = {"systolic_bp", "diastolic_bp", "heart_rate", "spo2", "temperature"}
 _ANTHRO_TYPES = {"height", "weight"}
 
+# Map a measurement type to the sensor whose `is_running` status
+# decides whether real readings will arrive in this session. Used
+# by the offline-placeholder seeder so the FSM doesn't hang in a
+# measuring state waiting on a sensor whose transport (BLE / MQTT)
+# is down.
+#
+# - The Omron BP cuff covers the BP triple including heart_rate
+#   (the cuff's own pulse). The MAX30100 over MQTT also reports
+#   heart_rate; if either sensor is online, heart_rate will arrive
+#   for real. We attribute heart_rate to omron_bp here because
+#   it's the BP-path primary and the spec mapping pins it to that
+#   sensor — when both are offline the placeholder is correctly
+#   seeded; when MQTT is offline but Omron is online, no
+#   placeholder is seeded and Omron delivers the real reading.
+# - SpO2 + temperature + height all flow over MQTT (MAX30100 +
+#   MLX90614 + HC-SR04 on the ESP32 nodes).
+# - Weight comes from the Xiaomi scale over BLE.
+_TYPE_TO_SENSOR_NAME: dict[str, str] = {
+    "systolic_bp": "omron_bp",
+    "diastolic_bp": "omron_bp",
+    "heart_rate": "omron_bp",
+    "spo2": "mqtt_sensors",
+    "temperature": "mqtt_sensors",
+    "height": "mqtt_sensors",
+    "weight": "xiaomi_scale",
+}
+
+# Canonical unit per type, used when seeding offline placeholders.
+# The validator's _EXPECTED_UNITS table is authoritative; we mirror
+# the first acceptable form here to keep round-trip semantics
+# sensible (a placeholder row with a recognised unit reads cleaner
+# in the database than one with an "(offline)" sentinel unit, and
+# stays compatible with any future "downgrade is_valid=1 → 0"
+# tooling that checks units).
+_TYPE_TO_UNIT: dict[str, str] = {
+    "systolic_bp": "mmHg",
+    "diastolic_bp": "mmHg",
+    "heart_rate": "bpm",
+    "spo2": "%",
+    "temperature": "C",
+    "height": "cm",
+    "weight": "kg",
+}
+
+# Stamped on placeholders' source_device so a downstream reviewer
+# can tell the row came from the FSM, not a real device.
+_OFFLINE_SOURCE_DEVICE = "(offline)"
+_OFFLINE_VALIDATION_NOTES = "sensor_offline"
+
 
 CitizenLookup = Callable[[str], Awaitable[Citizen | None]]
 
@@ -158,6 +208,13 @@ class KioskMainWindow(QMainWindow):
       ``Settings.MOCK_HARDWARE``).
     * ``citizen_lookup`` — async callable; given an RFID UID, returns
       the Citizen row or None. Injected so tests can stub it.
+    * ``sensors`` — the kiosk's sensor instances keyed by name (the
+      output of :func:`create_all_sensors`). Used to detect which
+      sensors are offline at the start of a measuring state so the
+      FSM can seed placeholder rows for the missing types instead
+      of hanging forever on a dead transport. Tests can pass an
+      empty mapping; offline detection then no-ops (no sensor =
+      no placeholder, the existing wait-for-events path applies).
     * ``deployment_barangay`` — pre-fill for the registration form's
       barangay field, sourced from device_config.
     * ``device_id`` — the kiosk's UUID; used for audit attribution
@@ -172,6 +229,7 @@ class KioskMainWindow(QMainWindow):
         db_session: SAOrmSession,
         printer: PrinterService,
         citizen_lookup: CitizenLookup,
+        sensors: Mapping[str, Sensor] | None = None,
         deployment_barangay: str = "",
         device_id: str = "",
     ) -> None:
@@ -184,8 +242,14 @@ class KioskMainWindow(QMainWindow):
         self._db = db_session
         self._printer = printer
         self._citizen_lookup = citizen_lookup
+        self._sensors: Mapping[str, Sensor] = sensors or {}
         self._deployment_barangay = deployment_barangay
         self._device_id = device_id
+
+        # Track which states have already seeded their offline
+        # placeholders so we don't double-seed if the user re-enters
+        # a measuring state mid-session (e.g., after Cancel-back).
+        self._offline_placeholders_seeded: set[str] = set()
 
         # Build screens
         self._idle_screen = IdleScreen()
@@ -316,12 +380,40 @@ class KioskMainWindow(QMainWindow):
         # state the previous session left from.
         if state not in (State.IDLE, State.LANGUAGE_SELECT):
             return
-        asyncio.create_task(self._bus.publish(SessionResetForSensors()))
+        # Per-session placeholder gate goes with the session reset —
+        # the next MEASURING_* entry should re-evaluate which sensors
+        # are offline, not skip seeding because the previous session
+        # already did.
+        self._offline_placeholders_seeded.clear()
+        self._publish_async(self._bus.publish(SessionResetForSensors()))
+
+    def _publish_async(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Schedule a bus.publish coroutine on the running loop.
+
+        On the Pi, qasync runs the loop and ``asyncio.create_task``
+        works. In unit tests there is no running loop at the moment
+        of FSM-driven state changes — we close the coroutine
+        cleanly so it doesn't dangle as an "un-awaited" warning,
+        and tests that need to assert on the published event drive
+        the bus directly.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — drop the coroutine cleanly. This is
+            # the unit-test path; production always has qasync up.
+            coro.close()
+            return
+        asyncio.create_task(coro)
 
     def _configure_state_specific(
         self, state: str, snapshot: FsmSnapshot, language: Language
     ) -> None:
-        if state == State.REPORT:
+        if state == State.MEASURING_VITALS:
+            self._seed_offline_sensor_placeholders(state)
+        elif state == State.MEASURING_ANTHRO:
+            self._seed_offline_sensor_placeholders(state)
+        elif state == State.REPORT:
             self._render_report(snapshot, language)
         elif state == State.PRINTING:
             self._kick_off_print_job(snapshot, language)
@@ -332,6 +424,74 @@ class KioskMainWindow(QMainWindow):
             )
         elif state == State.ERROR:
             self._error_screen.set_diagnostic(getattr(self._fsm, "_error_reason", None))
+
+    def _seed_offline_sensor_placeholders(self, state: str) -> None:
+        """Synthesize is_valid=0 placeholder rows for offline sensors.
+
+        Without this, the FSM would hang in MEASURING_VITALS /
+        MEASURING_ANTHRO whenever a sensor's transport is down (most
+        commonly: MQTT broker absent → no SpO2 / temperature / height
+        ever arrives). The placeholders are real Measurement rows
+        with ``is_valid=0`` and ``validation_notes="sensor_offline"``;
+        they count toward _captured_types so
+        ``_maybe_advance_measurement_path`` can fire path-complete
+        once the available sensors finish, but the REPORT screen
+        filters them out (it shows is_valid=1 only).
+
+        Idempotent per-session: tracked via
+        ``_offline_placeholders_seeded`` so a re-entry into the same
+        measuring state (rare, but possible after a Cancel-back)
+        doesn't double-seed.
+
+        No-op when the sensors mapping is empty (typical of unit
+        tests that don't care about the offline path) or when every
+        expected sensor is reporting ``is_running``.
+        """
+        if state in self._offline_placeholders_seeded:
+            return
+        if not self._sensors:
+            return
+        expected = _VITALS_TYPES if state == State.MEASURING_VITALS else _ANTHRO_TYPES
+        offline_types: list[str] = []
+        for measurement_type in sorted(expected):
+            sensor_name = _TYPE_TO_SENSOR_NAME.get(measurement_type)
+            if sensor_name is None:
+                continue
+            sensor = self._sensors.get(sensor_name)
+            if sensor is None:
+                continue
+            if sensor.is_running:
+                continue
+            offline_types.append(measurement_type)
+
+        if not offline_types:
+            self._offline_placeholders_seeded.add(state)
+            return
+
+        _log.info(
+            "main_window.offline_sensors_detected",
+            state=state,
+            offline_types=offline_types,
+        )
+        for measurement_type in offline_types:
+            unit = _TYPE_TO_UNIT.get(measurement_type, "")
+            _log.info(
+                "main_window.offline_placeholder_created",
+                type=measurement_type,
+            )
+            self._publish_async(
+                self._bus.publish(
+                    MeasurementProposed(
+                        measurement_type=measurement_type,
+                        value=0.0,
+                        unit=unit,
+                        source_device=_OFFLINE_SOURCE_DEVICE,
+                        claimed_is_valid=False,
+                        validation_notes=_OFFLINE_VALIDATION_NOTES,
+                    )
+                )
+            )
+        self._offline_placeholders_seeded.add(state)
 
     def _configure_state_timeout(self, state: str) -> None:
         ms_by_state: dict[str, int] = {
@@ -447,7 +607,7 @@ class KioskMainWindow(QMainWindow):
         can retry if the connection silently fails.
         """
         _log.info("main_window.bp_connect_requested")
-        asyncio.create_task(self._bus.publish(BpMeasurementRequested()))
+        self._publish_async(self._bus.publish(BpMeasurementRequested()))
         # Re-enable the button after the sensor's worst-case window so
         # a failed connect doesn't leave the citizen stuck.
         QTimer.singleShot(
@@ -518,7 +678,24 @@ class KioskMainWindow(QMainWindow):
             unit=event.unit,
             source_device=event.source_device,
         )
-        result = validate_measurement(event.measurement_type, event.value, event.unit)
+
+        # The producer can short-circuit the unit/range validator by
+        # claiming is_valid=False AND attaching its own
+        # validation_notes — this is the channel the FSM uses to
+        # seed offline placeholders ("sensor_offline") without the
+        # validator clobbering the reason with a "unit must be …"
+        # message. For everything else, we run the validator as
+        # before; the kiosk doesn't trust a sensor adapter's
+        # claimed_is_valid=True over the validator's verdict.
+        if event.claimed_is_valid is False and event.validation_notes is not None:
+            is_valid_int = 0
+            validation_notes: str | None = event.validation_notes
+        else:
+            result = validate_measurement(
+                event.measurement_type, event.value, event.unit
+            )
+            is_valid_int = 1 if result.is_valid else 0
+            validation_notes = result.validation_notes
 
         # The session row is created on entry to PATH_CHOICE (or after
         # consent_given for new citizens); if it isn't there yet, we
@@ -539,8 +716,8 @@ class KioskMainWindow(QMainWindow):
             unit=event.unit,
             source_device=event.source_device,
             measured_at=now,
-            is_valid=1 if result.is_valid else 0,
-            validation_notes=result.validation_notes,
+            is_valid=is_valid_int,
+            validation_notes=validation_notes,
             raw_json=None,
             synced=0,
             updated_at=now,
@@ -554,6 +731,17 @@ class KioskMainWindow(QMainWindow):
         self._on_measurement_persisted(meas)
 
     def _on_measurement_persisted(self, meas: Measurement) -> None:
+        # Track captured types REGARDLESS of validity. This lets
+        # offline placeholders (is_valid=0, validation_notes=
+        # "sensor_offline") count toward path completion so the FSM
+        # can advance when only the available sensors finish — the
+        # alternative is a hang in MEASURING_VITALS / MEASURING_ANTHRO
+        # whenever a transport is down (2026-05-07 bench: 20 sessions,
+        # 0 completed). The REPORT screen filters to is_valid=1, so
+        # placeholders never reach the citizen.
+        self._captured_types.add(meas.type)
+        self._maybe_advance_measurement_path()
+
         if not bool(meas.is_valid):
             return
         language: Language = self._fsm.session_language or "en"
@@ -565,9 +753,6 @@ class KioskMainWindow(QMainWindow):
             self._measuring_vitals_screen.apply_measurement(label, rendered)
         elif self._fsm.state == State.MEASURING_ANTHRO:
             self._measuring_anthro_screen.apply_measurement(label, rendered)
-
-        self._captured_types.add(meas.type)
-        self._maybe_advance_measurement_path()
 
     def _maybe_advance_measurement_path(self) -> None:
         # If every measurement type expected for the current state has

@@ -107,6 +107,7 @@ def main() -> int:  # pragma: no cover - hardware-bound entry point
         db_session=db,
         printer=printer,
         citizen_lookup=lookup_citizen,
+        sensors=sensors,
         deployment_barangay=deployment_barangay,
         device_id=device_id,
     )

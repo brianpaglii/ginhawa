@@ -85,6 +85,16 @@ class MeasurementProposed(Event):
     final say on the persisted ``is_valid`` and may override it
     with a ``validation_notes`` string.
 
+    ``validation_notes`` is producer-supplied context for cases
+    where the publisher already knows the row is invalid AND wants
+    to preserve a specific reason — e.g., the FSM seeding an
+    "offline placeholder" row when a sensor's transport (MQTT,
+    BLE) is down at the start of a measuring state. When set in
+    combination with ``claimed_is_valid=False``, the persist path
+    skips the unit/range validator (which would clobber the
+    reason with a "unit must be …" string) and writes the
+    producer's notes verbatim.
+
     There is no separate ``MeasurementCaptured`` event today. If a
     future GUI subscriber needs notification *after* persistence
     (e.g., real-time on-screen display of the just-saved row), add
@@ -97,6 +107,7 @@ class MeasurementProposed(Event):
     unit: str
     source_device: str
     claimed_is_valid: bool
+    validation_notes: str | None = None
 
 
 class MeasurementPathComplete(Event):
