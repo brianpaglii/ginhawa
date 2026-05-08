@@ -214,13 +214,16 @@ def test_main_window_filters_invalid_measurements_on_report(
     assert "128 mmHg" in list_widget.item(0).text()
 
 
-# Verifies entry to MEASURING_VITALS does NOT auto-publish
-# BpMeasurementRequested — the citizen must tap the connect button
-# first. The 2026-05-05 InProgress regression was caused by firing
-# on state entry, before the cuff was in pairing mode. Mortality:
-# 'Would fail if the auto-fire regression came back.'
+# Verifies that entering MEASURING_VITALS auto-fires
+# BpMeasurementRequested on the bus. The user-gated "Connect to
+# cuff" button is gone; the OmronBpSensor's 8×10 s retry budget
+# absorbs the time the citizen needs to position the cuff and
+# press its BT button. The original "InProgress" regression that
+# motivated the gating is now serialised by BleAdapterLock.
+# Mortality: would fail if state-entry auto-fire regressed back
+# to "user must press a button first".
 @pytest.mark.asyncio
-async def test_measuring_vitals_does_not_autopublish_bp_request(
+async def test_measuring_vitals_auto_fires_bp_request(
     main_window: KioskMainWindow,
     fsm: SessionFSM,
     bus: EventBus,
@@ -235,53 +238,38 @@ async def test_measuring_vitals_does_not_autopublish_bp_request(
 
     bus.subscribe(BpMeasurementRequested, listener)
 
-    fsm.rfid_scanned("CARD_BP_AUTOPUBLISH")
+    fsm.rfid_scanned("CARD_BP_AUTOFIRE")
     fsm.citizen_identified(_make_citizen(db_session))
     fsm.language_chosen("en")
     fsm.path_selected("vitals")
     assert _current_object_name(main_window) == "measuring_vitals_screen"
 
-    # Yield once so any erroneously-scheduled task gets to run.
-    await asyncio.sleep(0)
-    assert received == [], (
-        "MEASURING_VITALS entry must not auto-publish BpMeasurementRequested; "
-        f"got {len(received)} events"
-    )
-
-
-# Verifies tapping the connect-to-cuff button publishes exactly one
-# BpMeasurementRequested. The whole point of the user-gated flow:
-# the request only fires when the citizen has the cuff in pairing
-# mode and chooses to connect. Mortality: 'Would fail if the button
-# weren't wired to the bus.'
-@pytest.mark.asyncio
-async def test_connect_to_cuff_button_publishes_bp_request(
-    main_window: KioskMainWindow,
-    fsm: SessionFSM,
-    bus: EventBus,
-    db_session: Session,
-) -> None:
-    from ginhawa_kiosk.fsm import BpMeasurementRequested
-
-    received: list[BpMeasurementRequested] = []
-
-    async def listener(event: BpMeasurementRequested) -> None:
-        received.append(event)
-
-    bus.subscribe(BpMeasurementRequested, listener)
-
-    fsm.rfid_scanned("CARD_BP_BUTTON")
-    fsm.citizen_identified(_make_citizen(db_session))
-    fsm.language_chosen("en")
-    fsm.path_selected("vitals")
-
-    main_window._measuring_vitals_screen.connect_to_cuff_requested.emit()
     # Drain pending tasks so the create_task(bus.publish(...)) coroutine
-    # actually runs to the listener.
+    # scheduled on entry actually runs to the listener.
     for _ in range(5):
         await asyncio.sleep(0)
 
-    assert len(received) == 1
+    assert len(received) == 1, (
+        f"MEASURING_VITALS entry must auto-publish exactly one "
+        f"BpMeasurementRequested; got {len(received)}"
+    )
+
+
+# Verifies the screen no longer has the legacy "Connect to cuff"
+# button — the auto-fire flow makes it redundant. Mortality: would
+# fail if a future re-add of the button slipped through review,
+# because the bus would then receive two BpMeasurementRequested
+# events per session (one auto, one user) and the lock-protected
+# directed connect would briefly deadlock against itself.
+def test_measuring_vitals_screen_has_no_connect_button(
+    main_window: KioskMainWindow,
+) -> None:
+    from PyQt6.QtWidgets import QPushButton
+
+    screen = main_window._measuring_vitals_screen
+    button = screen.findChild(QPushButton, "measuring_vitals_connect_button")
+    assert button is None
+    assert not hasattr(screen, "connect_to_cuff_requested")
 
 
 def _make_citizen(db: Session) -> Citizen:

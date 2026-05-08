@@ -83,9 +83,9 @@ class _GuiStrings:
     measuring_vitals_bp_instruction: str
     measuring_vitals_pulse_instruction: str
     measuring_vitals_capturing: str
-    measuring_vitals_connect_button: str
-    measuring_vitals_connect_help: str
-    measuring_vitals_connecting: str
+    measuring_vitals_status_waiting: str
+    measuring_vitals_status_connected: str
+    measuring_vitals_status_failed: str
 
     # MeasuringAnthroScreen
     measuring_anthro_title: str
@@ -169,19 +169,20 @@ _EN = _GuiStrings(
         "2. Press the START button on the cuff and wait for it to finish.\n"
         "3. Press the Bluetooth (BT) button on the cuff — the BT icon "
         "will flash.\n"
-        "4. Tap 'Connect to cuff' below."
+        "The kiosk will connect automatically (you have about 80 seconds)."
     ),
     measuring_vitals_pulse_instruction=(
         "Place your index finger inside the pulse oximeter cup. Stay still "
         "until the reading appears."
     ),
     measuring_vitals_capturing="Capturing... please wait.",
-    measuring_vitals_connect_button="Connect to cuff",
-    measuring_vitals_connect_help=(
-        "Tap this AFTER you have pressed the BT button on the cuff and "
-        "see the BT icon flashing."
+    measuring_vitals_status_waiting="Waiting for cuff...",
+    measuring_vitals_status_connected=(
+        "Connected. Press START on the cuff to take a reading."
     ),
-    measuring_vitals_connecting="Connecting to cuff...",
+    measuring_vitals_status_failed=(
+        "Could not connect to the cuff. Tap Cancel and try again."
+    ),
     measuring_anthro_title="Body measurements",
     measuring_anthro_height_instruction=(
         "Stand straight under the height sensor. Look forward and stay still."
@@ -267,19 +268,20 @@ _TL = _GuiStrings(
         "2. Pindutin ang START button sa cuff at hintayin matapos.\n"
         "3. Pindutin ang Bluetooth (BT) button sa cuff — kumukurap "
         "ang BT icon.\n"
-        "4. I-tap ang 'Ikonekta sa cuff' sa ibaba."
+        "Awtomatikong kokonekta ang kiosk (mga 80 segundo ang oras)."
     ),
     measuring_vitals_pulse_instruction=(
         "Ilagay ang iyong hintuturo sa loob ng pulse oximeter. Manatiling "
         "nakatigil hanggang lumitaw ang sukat."
     ),
     measuring_vitals_capturing="Sinusukat... pakihintay.",
-    measuring_vitals_connect_button="Ikonekta sa cuff",
-    measuring_vitals_connect_help=(
-        "I-tap ito MATAPOS mong pindutin ang BT button sa cuff at "
-        "kumukurap ang BT icon."
+    measuring_vitals_status_waiting="Hinihintay ang cuff...",
+    measuring_vitals_status_connected=(
+        "Konektado. Pindutin ang START sa cuff para magsukat."
     ),
-    measuring_vitals_connecting="Kumokonekta sa cuff...",
+    measuring_vitals_status_failed=(
+        "Hindi nakakonekta sa cuff. I-tap ang Kanselahin at subukan ulit."
+    ),
     measuring_anthro_title="Sukat ng katawan",
     measuring_anthro_height_instruction=(
         "Tumayo nang tuwid sa ilalim ng height sensor. Tumingin sa "

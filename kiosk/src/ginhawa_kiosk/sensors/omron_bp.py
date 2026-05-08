@@ -69,12 +69,17 @@ _CUFF_MAC_CONFIG_KEY = "omron_cuff_mac"
 _SOURCE_DEVICE = "omron_hem7155t"
 
 # Retry budget for the connect() handshake. Total worst-case window:
-# (RETRIES - 1) * DELAY ≈ 8 s of patience for the cuff to start
-# advertising after the user presses the BT button. Tuned for the
-# bench-tested HEM-7155T behaviour where the BT button takes a
-# beat to flip the radio into pairing mode.
-_BP_CONNECT_RETRIES = 5
-_BP_CONNECT_RETRY_DELAY_S = 2.0
+# (RETRIES - 1) * DELAY ≈ 70 s of patience for the cuff to start
+# advertising. Sized for the auto-fire flow: the FSM publishes
+# BpMeasurementRequested on entry to MEASURING_VITALS, which lands
+# before the citizen has had a chance to position the cuff and
+# press its BT button. The retry loop has to span "user reads the
+# instructions, places the cuff, takes the BP, presses BT button"
+# — call it ~80 seconds — without giving up. The Xiaomi-vs-Omron
+# adapter collision that previously motivated a shorter window is
+# now serialised by the BleAdapterLock.
+_BP_CONNECT_RETRIES = 8
+_BP_CONNECT_RETRY_DELAY_S = 10.0
 
 # Freshness window for stored measurements. The HEM-7155T's
 # store-and-forward BLE model means a citizen who taps "Connect to
@@ -568,6 +573,18 @@ class OmronBpSensor(Sensor):
                     await asyncio.sleep(_BP_CONNECT_RETRY_DELAY_S)
 
         if connected_client is None:
+            # Distinct log event from the per-attempt
+            # omron_bp.connect_attempt_failed: this one fires once
+            # when the budget is fully spent so journalctl filters
+            # ("hung BP cuff for >80s") work cleanly without
+            # double-counting per-attempt warnings.
+            self._logger.warning(
+                "omron_bp.retries_exhausted",
+                mac=mac,
+                attempts=_BP_CONNECT_RETRIES,
+                window_s=_BP_CONNECT_RETRIES * _BP_CONNECT_RETRY_DELAY_S,
+                last_error=str(last_error) if last_error else None,
+            )
             raise RuntimeError(
                 f"Omron HEM-7155T at {mac} did not connect after "
                 f"{_BP_CONNECT_RETRIES} attempts — put the cuff into "

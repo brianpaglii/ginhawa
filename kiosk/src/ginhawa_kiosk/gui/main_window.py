@@ -81,16 +81,6 @@ TIMEOUT_END_MS = 5_000
 TIMEOUT_ABORTED_MS = 3_000
 TIMEOUT_ERROR_MS = 10_000
 
-# How long to leave the "Connect to cuff" button disabled after a
-# tap. Sized to the OmronBpSensor's worst-case window: 5 connect
-# retries at 2 s each (10 s) plus the 120 s notify-wait timeout,
-# rounded up to 135 s. After this, the citizen can re-tap to retry
-# without restarting the session — handy when they pressed the BT
-# button at the wrong time and the cuff dropped out of pairing
-# mode.
-BP_CONNECT_REENABLE_MS = 135_000
-
-
 # Localised measurement labels used on REPORT and the live capture
 # lists during MEASURING_*. Maps schema type → per-language label.
 _MEASUREMENT_LABELS: dict[Language, dict[str, str]] = {
@@ -324,13 +314,6 @@ class KioskMainWindow(QMainWindow):
         self._report_screen.finish_without_printing_requested.connect(
             self._on_finish_without_printing
         )
-        # User-gated BP cuff connect — fires BpMeasurementRequested ONLY
-        # when the citizen has the cuff in pairing mode and taps the
-        # button. See sensors/omron_bp.py for why auto-firing on state
-        # entry produces InProgress errors on real hardware.
-        self._measuring_vitals_screen.connect_to_cuff_requested.connect(
-            self._on_bp_connect_requested
-        )
 
         # Cancel + Change-language are uniform across BaseScreen children.
         for screen in self._screens.values():
@@ -411,6 +394,14 @@ class KioskMainWindow(QMainWindow):
     ) -> None:
         if state == State.MEASURING_VITALS:
             self._seed_offline_sensor_placeholders(state)
+            # Auto-fire the BP connect attempt. The OmronBpSensor's
+            # 8 × 10 s retry window is sized to span the time the
+            # citizen needs to position the cuff and press its BT
+            # button. The Xiaomi-vs-Omron adapter contention that
+            # previously demanded a user-gated trigger is now
+            # serialised by BleAdapterLock — see sensors/ble_lock.py.
+            _log.info("main_window.bp_request_auto_fired")
+            self._publish_async(self._bus.publish(BpMeasurementRequested()))
         elif state == State.MEASURING_ANTHRO:
             self._seed_offline_sensor_placeholders(state)
         elif state == State.REPORT:
@@ -638,25 +629,6 @@ class KioskMainWindow(QMainWindow):
                 error=type(exc).__name__,
             )
             raise
-
-    def _on_bp_connect_requested(self) -> None:
-        """Citizen pressed "Connect to cuff" on MeasuringVitalsScreen.
-
-        Publishes ``BpMeasurementRequested`` for the OmronBpSensor to
-        pick up. The screen has already disabled its own button (see
-        :meth:`MeasuringVitalsScreen._on_connect_clicked`); we schedule
-        a re-enable timer scoped to the sensor's worst-case timeout
-        (5 connect retries × 2 s + 120 s notify-wait) so the citizen
-        can retry if the connection silently fails.
-        """
-        _log.info("main_window.bp_connect_requested")
-        self._publish_async(self._bus.publish(BpMeasurementRequested()))
-        # Re-enable the button after the sensor's worst-case window so
-        # a failed connect doesn't leave the citizen stuck.
-        QTimer.singleShot(
-            BP_CONNECT_REENABLE_MS,
-            lambda: self._measuring_vitals_screen.set_connecting(False),
-        )
 
     def _on_cancel(self) -> None:
         # Cancel from any cancellable state → ABORTED.
