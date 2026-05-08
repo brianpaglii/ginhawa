@@ -52,6 +52,8 @@ from .fsm import EventBus, SessionFSM
 from .gui.main_window import KioskMainWindow
 from .sensors import create_all_sensors
 from .services.printer import create_printer_service
+from .sync.client import CloudClient
+from .sync.daemon import SyncDaemon
 
 _log = structlog.get_logger(__name__)
 
@@ -125,6 +127,44 @@ def main() -> int:  # pragma: no cover - hardware-bound entry point
                 )
 
     loop.create_task(boot_sensors())
+
+    # Background cloud sync. The kiosk is offline-first: SyncDaemon
+    # periodically uploads any synced=0 rows (citizens, sessions,
+    # measurements) and marks them synced once the cloud confirms.
+    # CloudClient owns its own httpx.AsyncClient bound to the qasync
+    # loop; SyncDaemon.run() is a long-lived coroutine that loops
+    # every interval_seconds. A done-callback logs unhandled
+    # exceptions — under normal operation only CloudCredentialError
+    # terminates run() (and the daemon flips
+    # stopped_due_to_credential_error rather than raising), but a
+    # crash escaping the loop should leave a journalctl trace
+    # rather than die silently.
+    cloud_client = CloudClient(
+        base_url=settings.CLOUD_API_URL,
+        api_key=settings.KIOSK_API_KEY,
+        device_id=settings.KIOSK_DEVICE_ID,
+    )
+    sync_daemon = SyncDaemon(
+        session_factory=session_factory,
+        cloud=cloud_client,
+        interval_seconds=30.0,
+    )
+    sync_task = loop.create_task(sync_daemon.run())
+
+    def _log_sync_task_failure(task: asyncio.Task[None]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            _log.warning("kiosk.sync_daemon_crashed", error=type(exc).__name__)
+
+    sync_task.add_done_callback(_log_sync_task_failure)
+    _log.info(
+        "kiosk.boot.sync_daemon_started",
+        cloud_url=settings.CLOUD_API_URL,
+        device_id=settings.KIOSK_DEVICE_ID,
+        interval_seconds=30.0,
+    )
 
     with loop:
         loop.run_forever()
