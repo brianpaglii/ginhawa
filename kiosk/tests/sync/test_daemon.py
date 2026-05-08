@@ -348,3 +348,123 @@ async def test_daemon_run_stops_on_credential_error(
         e for e in logger.events if e[1] == "sync.credential_error_stopping_daemon"
     ]
     assert len(cred_errs) == 1
+
+
+# ---------------------------------------------------------------------
+# run() loop resilience to per-cycle exceptions
+# ---------------------------------------------------------------------
+# These tests stub run_once directly so they can drive the loop's
+# exception-handling branches without needing an HTTP fixture or
+# write-contended SQLite — both run_once's behaviour and the
+# session/cloud setup are covered by the tests above. The stub
+# means we never dereference ``session_factory`` / ``cloud``, so we
+# pass cast'd None placeholders instead of pulling in the
+# encrypted-DB conftest fixture (which depends on the system
+# sqlcipher3 module that isn't installed on every dev box).
+
+
+def _stub_daemon() -> tuple[SyncDaemon, CapturingLogger]:
+    from typing import cast
+
+    logger = CapturingLogger()
+    daemon = SyncDaemon(
+        session_factory=cast(sessionmaker[Session], None),
+        cloud=cast(CloudClient, None),
+        interval_seconds=0.01,
+        logger=logger,
+    )
+    return daemon, logger
+
+
+# Verifies the daemon catches OperationalError from run_once,
+# logs sync.db_locked_retrying, and continues into the next cycle.
+# Bench evidence (2026-05-08): SyncDaemon ran 8 successful cycles
+# then crashed when the FSM grabbed the SQLite write lock at the
+# same instant the daemon was committing a sync_attempt row. The
+# add_done_callback in __main__ surfaced it as
+# kiosk.sync_daemon_crashed; the contention is transient so the
+# next cycle is the right "retry".
+# Mortality: would fail if the OperationalError branch were
+# dropped from run() and the daemon resumed exiting on
+# write contention.
+@pytest.mark.asyncio
+async def test_run_recovers_from_operational_error() -> None:
+    from sqlalchemy.exc import OperationalError
+
+    daemon, logger = _stub_daemon()
+
+    calls = {"n": 0}
+
+    async def fake_run_once() -> None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # SQLAlchemy raises OperationalError with (statement,
+            # params, orig). Construct it the way SQLAlchemy itself
+            # would when SQLite says "database is locked".
+            raise OperationalError(
+                "INSERT INTO audit_log (...) VALUES (...)",
+                {},
+                Exception("database is locked"),
+            )
+        # Second cycle succeeds; signal stop so run() exits cleanly.
+        daemon.stop()
+
+    daemon.run_once = fake_run_once  # type: ignore[method-assign]
+    await daemon.run()
+
+    assert calls["n"] == 2
+    assert daemon.stopped_due_to_credential_error is False
+    db_locked = [e for e in logger.events if e[1] == "sync.db_locked_retrying"]
+    assert len(db_locked) == 1
+    level, _event, kwargs = db_locked[0]
+    assert level == "warning"
+    assert "OperationalError" in kwargs["error_type"]
+
+
+# Verifies the CloudCredentialError path: the daemon terminates
+# run() and flips stopped_due_to_credential_error. This is also
+# exercised end-to-end by test_daemon_run_stops_on_credential_error
+# above; this version isolates the run-loop semantics from the
+# HTTP fixture so a regression in the loop logic doesn't hide
+# behind an HTTP-mock misconfiguration.
+@pytest.mark.asyncio
+async def test_run_propagates_credential_error() -> None:
+    from ginhawa_kiosk.sync.client import CloudCredentialError
+
+    daemon, logger = _stub_daemon()
+
+    async def fake_run_once() -> None:
+        raise CloudCredentialError("invalid kiosk credential")
+
+    daemon.run_once = fake_run_once  # type: ignore[method-assign]
+    await daemon.run()
+
+    assert daemon.stopped_due_to_credential_error is True
+    cred_errs = [
+        e for e in logger.events if e[1] == "sync.credential_error_stopping_daemon"
+    ]
+    assert len(cred_errs) == 1
+
+
+# Verifies that an unexpected exception (anything other than
+# CloudCredentialError or OperationalError) escapes run() so the
+# add_done_callback in __main__.py surfaces it as
+# kiosk.sync_daemon_crashed. The opposite (silently swallowing
+# every exception) would mean a programming bug in run_once is
+# invisible until the daemon falls behind on the wall clock.
+# Mortality: would fail if a future blanket "except Exception"
+# crept into run() and started eating real bugs.
+@pytest.mark.asyncio
+async def test_run_propagates_unexpected_error() -> None:
+    daemon, _logger = _stub_daemon()
+
+    async def fake_run_once() -> None:
+        raise ValueError("simulated programming bug")
+
+    daemon.run_once = fake_run_once  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="simulated programming bug"):
+        await daemon.run()
+
+    # Daemon did not stop "cleanly" — the credential-error flag is
+    # still False because the exception bypassed that branch.
+    assert daemon.stopped_due_to_credential_error is False

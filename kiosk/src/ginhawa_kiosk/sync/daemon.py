@@ -41,6 +41,7 @@ from collections import Counter
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..db.models import (
@@ -263,6 +264,24 @@ class SyncDaemon:
                 )
                 self._stopped_due_to_credential_error = True
                 return
+            except OperationalError as exc:
+                # SQLite write contention with the FSM (e.g., the citizen
+                # taps "Finish without printing" the same instant the
+                # daemon is staging a sync_attempt audit row). The
+                # 2026-05-08 bench captured exactly this collision:
+                # 8 successful cycles, then a "database is locked"
+                # OperationalError that previously escaped to the
+                # add_done_callback in __main__ and surfaced as
+                # kiosk.sync_daemon_crashed. The contention is transient
+                # — the next cycle (interval seconds away) is the retry,
+                # so we just log + continue here. Truncate the error
+                # message because SQLAlchemy's str(exc) embeds the full
+                # offending SQL which makes journalctl noisy.
+                self._logger.warning(
+                    "sync.db_locked_retrying",
+                    error_type=type(exc).__name__,
+                    error=str(exc)[:200],
+                )
             try:
                 await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
             except asyncio.TimeoutError:
