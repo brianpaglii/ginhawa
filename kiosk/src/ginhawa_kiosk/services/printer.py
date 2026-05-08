@@ -352,9 +352,25 @@ def _try_derive_bmi(
 
 
 def _session_timestamp(session: Session, fallback_now: datetime) -> str:
+    """Format session.started_at for the receipt header.
+
+    The DB stores started_at as a UTC-aware ISO string (per the
+    project's "all timestamps stored UTC" rule). The cuff and GUI
+    run in the deployment's local timezone (Asia/Manila in
+    practice; the Pi's tz is configured via ``timedatectl``). We
+    convert to local time here so the citizen sees the wall-clock
+    time they took the measurement, not UTC — bench evidence
+    (2026-05-08): a 19:25 PHT session printed "11:25" on the
+    receipt before this fix.
+
+    ``.astimezone()`` with no argument resolves the host's local
+    tz via ``/etc/localtime``. The fallback path uses
+    ``fallback_now`` which is already a naive-local
+    ``datetime.now()``, so it's left alone.
+    """
     raw = session.started_at
     try:
-        dt = datetime.fromisoformat(raw)
+        dt = datetime.fromisoformat(raw).astimezone()
     except ValueError:
         dt = fallback_now
     return dt.strftime("%Y-%m-%d %H:%M")

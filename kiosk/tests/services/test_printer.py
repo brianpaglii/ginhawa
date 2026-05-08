@@ -9,7 +9,10 @@ the unit tests below stay hardware-free.
 
 from __future__ import annotations
 
+import os
+import time
 import uuid
+from collections.abc import Iterator
 
 import pytest
 
@@ -20,8 +23,31 @@ from ginhawa_kiosk.services.printer import (
     PrintedStatus,
     PrintResult,
     XprinterPrinterService,
+    _session_timestamp,
     create_printer_service,
 )
+
+
+# Pin the process timezone so receipt-timestamp assertions are
+# deterministic regardless of where pytest runs. The kiosk's
+# deployment locale is Asia/Manila (UTC+8); the printer converts
+# the DB's UTC-aware ISO string to local before formatting, so
+# pinning the host tz here lets us assert exact wall-clock values
+# in the receipts. Restored on teardown so other test modules
+# don't see the change.
+@pytest.fixture(autouse=True)
+def _fixed_timezone() -> Iterator[None]:
+    original = os.environ.get("TZ")
+    os.environ["TZ"] = "Asia/Manila"
+    time.tzset()
+    try:
+        yield
+    finally:
+        if original is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original
+        time.tzset()
 
 
 def _make_citizen() -> Citizen:
@@ -116,7 +142,9 @@ async def test_print_format_english() -> None:
     receipt = p.mock_print_history[0]
 
     # English demographics labels
-    assert "Date: 2026-05-03 14:23" in receipt
+    # 14:23 UTC + 8h Asia/Manila = 22:23 PHT (printer converts via
+    # .astimezone() so the citizen sees their local wall-clock).
+    assert "Date: 2026-05-03 22:23" in receipt
     assert "Name: Maria Dela Cruz" in receipt
     assert "Age: 41" in receipt or "Age: 42" in receipt
     assert "Sex: F" in receipt
@@ -182,7 +210,8 @@ async def test_print_format_tagalog() -> None:
     receipt = p.mock_print_history[0]
 
     # Tagalog demographics labels
-    assert "Petsa: 2026-05-03 14:23" in receipt
+    # 14:23 UTC + 8h Asia/Manila = 22:23 PHT.
+    assert "Petsa: 2026-05-03 22:23" in receipt
     assert "Pangalan: Maria Dela Cruz" in receipt
     assert "Edad:" in receipt
     assert "Kasarian: F" in receipt
@@ -483,3 +512,63 @@ def test_create_printer_service_respects_mock_hardware_switch() -> None:
     _FakeSettings.MOCK_HARDWARE = False
     real_svc = create_printer_service(_FakeSettings())  # type: ignore[arg-type]
     assert isinstance(real_svc, XprinterPrinterService)
+
+
+# ---------------------------------------------------------------------
+# Session-timestamp UTC → local conversion
+# ---------------------------------------------------------------------
+# The DB stores started_at as a UTC-aware ISO string; the receipt
+# must show local wall-clock time so the citizen sees the time they
+# actually took the measurement, not UTC. Pre-fix bench evidence
+# (2026-05-08): a 19:25 PHT session printed "11:25" because the
+# formatter strftime'd a UTC-aware datetime directly. The autouse
+# fixture above pins the test host's tz to Asia/Manila so this
+# expected value (22:25 PHT for 14:25 UTC) is deterministic.
+# Mortality: would fail if .astimezone() were dropped from
+# _session_timestamp.
+def test_session_timestamp_converts_utc_to_local() -> None:
+    from datetime import datetime
+
+    session = SessionModel(
+        id=str(uuid.uuid4()),
+        citizen_id="x",
+        device_id="kiosk-test",
+        started_at="2026-05-08T11:25:00+00:00",
+        ended_at=None,
+        status="completed",
+        error_reason=None,
+        measurement_path="vitals",
+        printed_status="not_requested",
+        synced=0,
+        updated_at="2026-05-08T11:25:00+00:00",
+    )
+    fallback = datetime(2000, 1, 1, 0, 0)
+    formatted = _session_timestamp(session, fallback)
+    # 11:25 UTC + 8h = 19:25 PHT — matches the bench evidence in
+    # the bug report, now correct because the formatter converts.
+    assert formatted == "2026-05-08 19:25"
+
+
+# Verifies the malformed-input fallback still works under the new
+# .astimezone() call. fromisoformat raises ValueError on garbage,
+# the function returns ``fallback_now`` formatted directly. The
+# fallback path is naive-local by contract (datetime.now() with
+# no args), so no astimezone is involved on that branch.
+def test_session_timestamp_fallback_when_started_at_unparseable() -> None:
+    from datetime import datetime
+
+    session = SessionModel(
+        id=str(uuid.uuid4()),
+        citizen_id="x",
+        device_id="kiosk-test",
+        started_at="not-a-date",
+        ended_at=None,
+        status="completed",
+        error_reason=None,
+        measurement_path="vitals",
+        printed_status="not_requested",
+        synced=0,
+        updated_at="not-a-date",
+    )
+    fallback = datetime(2026, 5, 8, 19, 25)
+    assert _session_timestamp(session, fallback) == "2026-05-08 19:25"
