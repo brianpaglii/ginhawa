@@ -61,7 +61,7 @@ async def test_mqtt_subscriber_publishes_event_for_each_topic(
     captured_measurements: list[MeasurementProposed],
     db_session: Session,
 ) -> None:
-    set_device_config(db_session, "kiosk_device_id", _DEVICE_ID)
+    set_device_config(db_session, "kiosk_id", _DEVICE_ID)
     sub = MqttSensorSubscriber(bus, db_session)
 
     payloads = {
@@ -97,7 +97,7 @@ async def test_mqtt_subscriber_drops_malformed_payloads(
     captured_measurements: list[MeasurementProposed],
     db_session: Session,
 ) -> None:
-    set_device_config(db_session, "kiosk_device_id", _DEVICE_ID)
+    set_device_config(db_session, "kiosk_id", _DEVICE_ID)
     sub = MqttSensorSubscriber(bus, db_session)
 
     topic = f"ginhawa/kiosk/{_DEVICE_ID}/sensors/spo2"
@@ -120,7 +120,7 @@ async def test_mqtt_subscriber_drops_unknown_topic_suffix(
     captured_measurements: list[MeasurementProposed],
     db_session: Session,
 ) -> None:
-    set_device_config(db_session, "kiosk_device_id", _DEVICE_ID)
+    set_device_config(db_session, "kiosk_id", _DEVICE_ID)
     sub = MqttSensorSubscriber(bus, db_session)
 
     topic = f"ginhawa/kiosk/{_DEVICE_ID}/sensors/blood_alcohol"
@@ -130,14 +130,38 @@ async def test_mqtt_subscriber_drops_unknown_topic_suffix(
     assert captured_measurements == []
 
 
-# Verifies start() refuses to run if the kiosk_device_id isn't
-# configured. The subscriber needs the device_id to build its topic
-# filter; without it, subscribing to ``ginhawa/kiosk/None/...`` would
-# silently miss every real ESP32 message.
+# Verifies start() refuses to run if the kiosk_id isn't configured.
+# The subscriber needs the device_id to build its topic filter;
+# without it, subscribing to ``ginhawa/kiosk/None/...`` would
+# silently miss every real ESP32 message. The error message
+# explicitly references "kiosk_id" so an operator reading the
+# journal can map it to the device_config row __main__.py also
+# expects.
 @pytest.mark.asyncio
-async def test_mqtt_subscriber_raises_on_missing_device_id(
+async def test_start_raises_when_kiosk_id_missing(
     bus: EventBus, db_session: Session
 ) -> None:
     sub = MqttSensorSubscriber(bus, db_session)
-    with pytest.raises(SensorUnavailable, match="kiosk_device_id"):
+    with pytest.raises(SensorUnavailable, match="kiosk_id"):
         await sub.start()
+
+
+# Verifies the lookup hits the device_config row that __main__.py
+# also writes to (key="kiosk_id"). Mortality: would fail if anyone
+# re-introduced the old "kiosk_device_id" literal — the bench DB is
+# seeded with "kiosk_id" and a mismatch silently degrades to a
+# SensorUnavailable boot loop.
+def test_load_device_id_from_kiosk_id_key(bus: EventBus, db_session: Session) -> None:
+    set_device_config(db_session, "kiosk_id", _DEVICE_ID)
+    sub = MqttSensorSubscriber(bus, db_session)
+    assert sub._load_device_id() == _DEVICE_ID
+
+
+# Verifies the loader returns None (not a string default) when the
+# row is absent, so start() can raise an explicit SensorUnavailable
+# instead of building a topic filter against a falsy device_id.
+def test_load_device_id_returns_none_when_kiosk_id_missing(
+    bus: EventBus, db_session: Session
+) -> None:
+    sub = MqttSensorSubscriber(bus, db_session)
+    assert sub._load_device_id() is None

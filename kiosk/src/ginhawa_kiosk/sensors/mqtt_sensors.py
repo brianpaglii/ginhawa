@@ -41,7 +41,12 @@ from ..fsm.event_bus import EventBus, MeasurementProposed
 from .base import Sensor, SensorUnavailable
 
 
-_DEVICE_ID_CONFIG_KEY = "kiosk_device_id"
+# The device-id row in device_config. __main__.py also reads this row
+# (under its own ``_KIOSK_ID_KEY`` constant) — keeping the literal in
+# sync is load-bearing: the bench DB is seeded with key="kiosk_id",
+# and a mismatched literal here would fall back to None and the
+# subscriber would refuse to start with SensorUnavailable.
+_DEVICE_ID_CONFIG_KEY = "kiosk_id"
 
 # Map topic-suffix → (measurement_type, expected_unit, source_device).
 # unit is taken verbatim from the payload but we keep the expected
