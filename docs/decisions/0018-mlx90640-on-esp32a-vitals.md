@@ -1,4 +1,4 @@
-i# ADR 0XXX: Move MLX90640BAB from ESP32-B to ESP32-A
+# ADR 0018: Move MLX90640BAB from ESP32-B to ESP32-A
 
 - **Status:** Accepted, supersedes ADR-0004's sensor-cluster pairing
 - **Date:** 2026-05-09
