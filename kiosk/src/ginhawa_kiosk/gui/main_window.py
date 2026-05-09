@@ -404,6 +404,17 @@ class KioskMainWindow(QMainWindow):
             self._publish_async(self._bus.publish(BpMeasurementRequested()))
         elif state == State.MEASURING_ANTHRO:
             self._seed_offline_sensor_placeholders(state)
+            # Reset the Xiaomi scale's stability gate immediately
+            # before the citizen is expected to step on. The
+            # IDLE/LANGUAGE_SELECT reset above is kept for
+            # defence-in-depth, but it has a known race: the scale
+            # advertises every ~5 s, so unlocking the gate during
+            # IDLE can let a stale broadcast slip through and re-lock
+            # the gate before the next MEASURING_ANTHRO entry. Same
+            # citizen back-to-back sessions then lose the second
+            # weight. Resetting again here closes that window — the
+            # gate publish is idempotent when already unlocked.
+            self._publish_async(self._bus.publish(SessionResetForSensors()))
         elif state == State.REPORT:
             self._render_report(snapshot, language)
         elif state == State.PRINTING:

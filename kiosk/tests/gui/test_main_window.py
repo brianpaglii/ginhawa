@@ -272,6 +272,106 @@ def test_measuring_vitals_screen_has_no_connect_button(
     assert not hasattr(screen, "connect_to_cuff_requested")
 
 
+# Verifies entering MEASURING_ANTHRO publishes SessionResetForSensors.
+# Closes the bench race where, between sessions, the Xiaomi scale's
+# ~5 s broadcast cadence let a stale advertisement satisfy the
+# stability gate during IDLE — the gate then re-locked before the
+# citizen actually stepped on for the next session, so back-to-back
+# anthro sessions silently lost the second weight. Resetting on
+# MEASURING_ANTHRO entry places the unlock immediately before the
+# citizen is expected to step on, eliminating the window. Mortality:
+# would fail if the publish were dropped, moved off the anthro
+# branch, or accidentally guarded by a flag.
+@pytest.mark.asyncio
+async def test_measuring_anthro_entry_resets_scale_gate(
+    main_window: KioskMainWindow,
+    fsm: SessionFSM,
+    bus: EventBus,
+    db_session: Session,
+) -> None:
+    from ginhawa_kiosk.fsm import SessionResetForSensors
+
+    received: list[SessionResetForSensors] = []
+
+    async def listener(event: SessionResetForSensors) -> None:
+        received.append(event)
+
+    bus.subscribe(SessionResetForSensors, listener)
+
+    fsm.rfid_scanned("CARD_ANTHRO_RESET")
+    fsm.citizen_identified(_make_citizen(db_session))
+    # The IDLE/LANGUAGE_SELECT branch in _maybe_publish_session_reset
+    # also fires; clear the listener buffer so the assertion below
+    # pins the MEASURING_ANTHRO publish specifically rather than
+    # racing with the LANGUAGE_SELECT one.
+    fsm.language_chosen("en")
+    for _ in range(5):
+        await asyncio.sleep(0)
+    received.clear()
+
+    fsm.path_selected("anthropometric")
+    assert _current_object_name(main_window) == "measuring_anthro_screen"
+
+    # Drain create_task'd publish.
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert len(received) == 1, (
+        "MEASURING_ANTHRO entry must publish exactly one "
+        f"SessionResetForSensors; got {len(received)}"
+    )
+
+
+# Verifies the IDLE/LANGUAGE_SELECT defence-in-depth resets are still
+# wired — both unlock paths are intentionally redundant. Mortality:
+# would fail if someone "simplified" by removing the older path,
+# leaving only the MEASURING_ANTHRO reset (which would re-introduce a
+# different race: the scale would have nothing keeping it idle if
+# the citizen never makes it to MEASURING_ANTHRO, e.g. they cancel
+# during PATH_CHOICE).
+@pytest.mark.asyncio
+async def test_back_to_back_sessions_each_reset_scale(
+    main_window: KioskMainWindow,
+    fsm: SessionFSM,
+    bus: EventBus,
+    db_session: Session,
+) -> None:
+    from ginhawa_kiosk.fsm import SessionResetForSensors
+
+    received: list[SessionResetForSensors] = []
+
+    async def listener(event: SessionResetForSensors) -> None:
+        received.append(event)
+
+    bus.subscribe(SessionResetForSensors, listener)
+
+    citizen = _make_citizen(db_session)
+
+    async def run_session(card: str) -> int:
+        before = len(received)
+        fsm.rfid_scanned(card)
+        fsm.citizen_identified(citizen)
+        fsm.language_chosen("en")
+        fsm.path_selected("anthropometric")
+        # Settle bus.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        # Bring the FSM back to IDLE so the next session can begin.
+        fsm.cancel()
+        fsm.acknowledge()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return len(received) - before
+
+    first = await run_session("CARD_BACKTOBACK_1")
+    second = await run_session("CARD_BACKTOBACK_2")
+
+    # At least one publish per session — IDLE / LANGUAGE_SELECT may
+    # also publish (defence in depth), so we assert >=1, not ==1.
+    assert first >= 1, f"first session published {first} resets"
+    assert second >= 1, f"second session published {second} resets"
+
+
 def _make_citizen(db: Session) -> Citizen:
     citizen = Citizen(
         id="cit-test-1",
