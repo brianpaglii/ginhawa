@@ -405,3 +405,38 @@ def test_gate_warmup_constant_covers_full_broadcast_cycle() -> None:
     # Xiaomi S200 broadcasts every ~5 s. Warmup must cover at least
     # one full cycle so a single cached re-emission can't slip past.
     assert _GATE_WARMUP_SECONDS >= 5.0
+
+
+# Verifies restart_warmup() makes the gate re-apply the warmup
+# window without unlocking or clearing the buffer. Models the
+# BleAdapterLock pause/resume cycle during BP capture: bench
+# (2026-05-09) saw a weight publish 1 s after xiaomi_scale.resumed,
+# impossible under normal stability semantics. Mortality: would
+# fail if restart_warmup() forgot to update _unlocked_at, OR if it
+# accidentally unlocked / cleared the buffer (regressing legitimate
+# capture flows).
+def test_warmup_restarts_after_resume() -> None:
+    gate = _WeightStabilityGate()
+    gate.unlock()
+    # Backdate the unlock so the warmup has already elapsed.
+    assert gate._unlocked_at is not None
+    gate._unlocked_at -= _GATE_WARMUP_SECONDS + 1.0
+    # First reading is admitted (warmup elapsed); buffer fills but
+    # not yet K readings, so accept returns None.
+    assert gate.accept(70.0) is None
+    assert len(gate._buffer) == 1
+
+    # Now restart the warmup. The gate stays unlocked (lock state
+    # unchanged) and the buffer is preserved (the queued reading
+    # remains), but a freshly-arriving cached advertisement should
+    # bounce off the warmup gate.
+    gate.restart_warmup()
+    assert gate.is_locked() is False
+    assert len(gate._buffer) == 1
+
+    # Reading immediately after the restart is dropped.
+    assert gate.accept(70.5) is None
+    # Buffer didn't grow — the warmup short-circuit fires before
+    # the append, which is the production-correct behaviour
+    # (cached broadcasts shouldn't poison the stability buffer).
+    assert len(gate._buffer) == 1

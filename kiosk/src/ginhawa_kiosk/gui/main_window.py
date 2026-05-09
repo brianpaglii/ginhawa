@@ -306,6 +306,16 @@ class KioskMainWindow(QMainWindow):
         # window can fire measurement_path_complete once each path is
         # fully captured.
         self._captured_types: set[str] = set()
+        # Types whose REAL (is_valid=1) reading has been persisted
+        # this session. Distinct from `_captured_types`, which also
+        # carries offline placeholders so the FSM can advance the
+        # measurement path even when sensors are down. Used as the
+        # duplicate-drop guard inside _on_measurement_proposed_event:
+        # a placeholder followed by a real reading is the expected
+        # upgrade, but a SECOND real reading (e.g., a stale broadcast
+        # the Xiaomi scale emits 1 s after BLE adapter resume) is a
+        # duplicate and gets dropped.
+        self._captured_real_types: set[str] = set()
 
         self._wire_signals()
 
@@ -365,6 +375,7 @@ class KioskMainWindow(QMainWindow):
 
         self._stack.setCurrentWidget(screen)
         self._captured_types.clear()
+        self._captured_real_types.clear()
         self._maybe_publish_bp_cancellation(self._previous_state, state)
         self._configure_state_specific(state, snapshot, active_language)
         self._configure_state_timeout(state)
@@ -772,6 +783,24 @@ class KioskMainWindow(QMainWindow):
             )
             return
 
+        # Drop a duplicate REAL reading. Each measurement type is
+        # recorded at most once per session — second weights, second
+        # BP triples, etc. should not silently produce extra rows.
+        # Placeholders (is_valid=0 with validation_notes="sensor_offline")
+        # don't activate this guard: a real reading after a placeholder
+        # is the expected upgrade path. The Xiaomi scale's gate +
+        # warmup window already tries to suppress duplicates at the
+        # sensor level; this is the belt-and-braces backstop for
+        # sensors / cached advertisements that slip past.
+        if is_valid_int == 1 and event.measurement_type in self._captured_real_types:
+            _log.warning(
+                "main_window.duplicate_measurement_dropped",
+                type=event.measurement_type,
+                unit=event.unit,
+                source_device=event.source_device,
+            )
+            return
+
         now = _utc_now_iso()
         meas = Measurement(
             id=str(uuid.uuid4()),
@@ -805,6 +834,8 @@ class KioskMainWindow(QMainWindow):
         # 0 completed). The REPORT screen filters to is_valid=1, so
         # placeholders never reach the citizen.
         self._captured_types.add(meas.type)
+        if bool(meas.is_valid):
+            self._captured_real_types.add(meas.type)
         self._maybe_advance_measurement_path()
 
         if not bool(meas.is_valid):

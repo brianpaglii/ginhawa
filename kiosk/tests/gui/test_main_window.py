@@ -255,6 +255,86 @@ async def test_measuring_vitals_auto_fires_bp_request(
     )
 
 
+# Verifies a second weight measurement of the same session is
+# dropped, not persisted. Models the bench race where the Xiaomi
+# scale's BLE library replays a cached advertisement after the
+# BleAdapterLock's pause/resume, slipping past the gate's warmup
+# window. Belt-and-braces: the warmup restart already shuts that
+# window, but a duplicate-drop guard at the persistence layer
+# protects against any other source of double-publish (e.g., a
+# future second sensor reporting the same type).
+# Mortality: would fail if the guard were dropped, or if it
+# (incorrectly) treated offline placeholders as "real" captures
+# and blocked the genuine reading that follows.
+@pytest.mark.asyncio
+async def test_duplicate_weight_dropped(
+    main_window: KioskMainWindow,
+    fsm: SessionFSM,
+    bus: EventBus,
+    db_session: Session,
+) -> None:
+    from sqlalchemy import select
+
+    from ginhawa_kiosk.db.models import Measurement
+    from ginhawa_kiosk.fsm import MeasurementProposed
+
+    fsm.rfid_scanned("CARD_DUP_WEIGHT")
+    fsm.citizen_identified(_make_citizen(db_session))
+    fsm.language_chosen("en")
+    fsm.path_selected("anthropometric")
+    assert fsm.current_session is not None
+
+    # First valid weight reading lands.
+    await bus.publish(
+        MeasurementProposed(
+            measurement_type="weight",
+            value=70.0,
+            unit="kg",
+            source_device="xiaomi_s200_ble",
+            claimed_is_valid=True,
+        )
+    )
+
+    rows = (
+        db_session.execute(
+            select(Measurement).where(
+                Measurement.session_id == fsm.current_session.id,
+                Measurement.type == "weight",
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1, "first weight should persist"
+    assert rows[0].value == pytest.approx(70.0)
+
+    # Second weight reading — duplicate — must be dropped.
+    await bus.publish(
+        MeasurementProposed(
+            measurement_type="weight",
+            value=72.5,
+            unit="kg",
+            source_device="xiaomi_s200_ble",
+            claimed_is_valid=True,
+        )
+    )
+
+    rows_after = (
+        db_session.execute(
+            select(Measurement).where(
+                Measurement.session_id == fsm.current_session.id,
+                Measurement.type == "weight",
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows_after) == 1, "duplicate weight must not persist"
+    # Confirm the surviving row is the first one (value didn't get
+    # silently overwritten by the duplicate).
+    assert rows_after[0].value == pytest.approx(70.0)
+
+
 # Verifies the screen no longer has the legacy "Connect to cuff"
 # button — the auto-fire flow makes it redundant. Mortality: would
 # fail if a future re-add of the button slipped through review,

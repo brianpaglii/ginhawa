@@ -145,6 +145,23 @@ class _WeightStabilityGate:
         self._buffer.clear()
         self._unlocked_at = time.monotonic()
 
+    def restart_warmup(self) -> None:
+        """Restart the warmup window without unlocking or clearing the buffer.
+
+        Used after BleAdapterLock pause/resume cycles (e.g., during
+        BP capture). The pause/resume isn't a session lifecycle
+        event — we don't want to clear the buffer or change the
+        lock — but the BLE library can replay cached advertisements
+        the moment the scanner resumes, which would otherwise
+        bypass the gate. Restarting the warmup makes those replays
+        bounce back the same way they would after a fresh unlock().
+        Bench evidence (2026-05-09): xiaomi_scale.resumed at
+        18:05:45 was followed by a weight publish at 18:05:46 —
+        impossible under normal stability semantics (3 readings
+        × 5 s broadcast cadence). This shuts that window.
+        """
+        self._unlocked_at = time.monotonic()
+
     def is_locked(self) -> bool:
         return self._locked
 
@@ -352,6 +369,12 @@ class XiaomiScaleSensor(Sensor):
         except Exception as exc:
             self._logger.warning("xiaomi_scale.resume_failed", error=type(exc).__name__)
             return
+        # Restart the gate's warmup window. The BLE library can
+        # deliver cached advertisements the moment the scanner
+        # resumes; without this restart, a stale broadcast captured
+        # during pause would skip the gate's stability check and
+        # publish a stale weight 1 s after BP completes.
+        self._gate.restart_warmup()
         self._paused = False
         self._logger.info("xiaomi_scale.resumed")
 
