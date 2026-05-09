@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   ApiError,
@@ -13,8 +13,10 @@ import {
   type SessionRead,
 } from "../api/client";
 import { useAuth } from "../auth/use-auth";
+import { ConfirmModal } from "../components/ConfirmModal";
 import { SkeletonCard } from "../components/Skeleton";
 import { StatusPill } from "../components/StatusPill";
+import { useToast } from "../components/use-toast";
 import { formatDateTime, formatDuration } from "../lib/datetime";
 import styles from "./SessionDetailPage.module.css";
 
@@ -129,7 +131,12 @@ function SessionDetailBody({ sessionId, sessionQuery }: BodyProps) {
 
       <SessionHeader sessionQuery={sessionQuery} citizenQuery={citizenQuery} />
 
-      <Measurements valid={validQ} invalid={invalidQ} />
+      <Measurements
+        valid={validQ}
+        invalid={invalidQ}
+        sessionId={sessionId}
+        canInvalidate={user?.role === "admin"}
+      />
 
       {canReadAudit && (
         <AuditTimeline
@@ -204,12 +211,60 @@ function Field({ label, value }: { label: string; value: string }) {
 function Measurements({
   valid,
   invalid,
+  sessionId,
+  canInvalidate,
 }: {
   valid: ReturnType<typeof useQuery<Page<MeasurementRead>, unknown>>;
   invalid: ReturnType<typeof useQuery<Page<MeasurementRead>, unknown>>;
+  sessionId: string;
+  canInvalidate: boolean;
 }) {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [target, setTarget] = useState<MeasurementRead | null>(null);
+
   const isLoading = valid.isPending || invalid.isPending;
   const error = valid.error ?? invalid.error;
+
+  async function handleInvalidate(reason?: string): Promise<void> {
+    if (target === null || reason === undefined) return;
+    try {
+      await apiClient.invalidateMeasurement(target.id, reason);
+      // Refetch session-scoped queries: both measurement panes (valid
+      // → drops the row, invalid → gains it) and the audit timeline
+      // (a new measurement.invalidate entry is now in the log).
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["measurements", sessionId, "valid"],
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["measurements", sessionId, "invalid"],
+        }),
+        queryClient.invalidateQueries({ queryKey: ["audit", sessionId] }),
+      ]);
+      toast.success({ title: "Measurement marked invalid" });
+      setTarget(null);
+    } catch (err) {
+      // 4xx: keep the modal open, surface the server detail. 5xx /
+      // network: generic copy. The modal stays open in both cases so
+      // the BHW can retry without re-opening it.
+      if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+        toast.error({
+          title: "Could not invalidate measurement",
+          message: err.message,
+        });
+      } else {
+        toast.error({
+          title: "Could not invalidate measurement",
+          message: "Failed. Please try again.",
+        });
+      }
+      // Re-throw so the modal's pending flag clears via its finally
+      // block — but in our `void | Promise<void>` contract throwing
+      // would also bubble; instead we just leave the modal open with
+      // the error toast. Returning normally is fine.
+    }
+  }
 
   if (isLoading) {
     return (
@@ -260,41 +315,90 @@ function Measurements({
             <th scope="col">Valid</th>
             <th scope="col">Measured</th>
             <th scope="col">Source</th>
+            {canInvalidate && <th scope="col">Actions</th>}
           </tr>
         </thead>
         <tbody>
-          {merged.map((m) => (
-            <tr key={m.id}>
-              <td data-label="Type">{prettyType(m.type)}</td>
-              <td data-label="Value">
-                {m.value} {m.unit}
-              </td>
-              <td data-label="Valid">
-                {m.is_valid === 1 ? (
-                  <span
-                    className={styles.validIcon}
-                    aria-label="valid measurement"
-                  >
-                    ✓
+          {merged.map((m) => {
+            const isInvalid = m.is_valid !== 1;
+            return (
+              <tr key={m.id} className={isInvalid ? styles.invalidRow : ""}>
+                <td data-label="Type">{prettyType(m.type)}</td>
+                <td data-label="Value">
+                  <span className={isInvalid ? styles.invalidValue : ""}>
+                    {m.value} {m.unit}
                   </span>
-                ) : (
-                  <span
-                    className={styles.invalidIcon}
-                    aria-label="invalidated measurement"
-                  >
-                    ✗
-                  </span>
+                  {isInvalid && (
+                    <span className={styles.invalidBadge}>Invalid</span>
+                  )}
+                </td>
+                <td data-label="Valid">
+                  {m.is_valid === 1 ? (
+                    <span
+                      className={styles.validIcon}
+                      aria-label="valid measurement"
+                    >
+                      ✓
+                    </span>
+                  ) : (
+                    <span
+                      className={styles.invalidIcon}
+                      aria-label="invalidated measurement"
+                    >
+                      ✗
+                    </span>
+                  )}
+                  {isInvalid && m.validation_notes && (
+                    <div className={styles.invalidNote}>
+                      {m.validation_notes}
+                    </div>
+                  )}
+                </td>
+                <td data-label="Measured">{formatDateTime(m.measured_at)}</td>
+                <td data-label="Source">{m.source_device}</td>
+                {canInvalidate && (
+                  <td data-label="Actions">
+                    {!isInvalid && (
+                      <button
+                        type="button"
+                        className={styles.invalidateBtn}
+                        onClick={() => setTarget(m)}
+                      >
+                        Invalidate
+                      </button>
+                    )}
+                  </td>
                 )}
-                {m.is_valid !== 1 && m.validation_notes && (
-                  <div className={styles.invalidNote}>{m.validation_notes}</div>
-                )}
-              </td>
-              <td data-label="Measured">{formatDateTime(m.measured_at)}</td>
-              <td data-label="Source">{m.source_device}</td>
-            </tr>
-          ))}
+              </tr>
+            );
+          })}
         </tbody>
       </table>
+      <ConfirmModal
+        open={target !== null}
+        title="Invalidate measurement?"
+        body={
+          target !== null ? (
+            <div>
+              <div>
+                <strong>{prettyType(target.type)}:</strong> {target.value}{" "}
+                {target.unit}
+              </div>
+              <div className={styles.modalMeta}>
+                Measured {formatDateTime(target.measured_at)}
+              </div>
+              <div className={styles.modalMeta}>
+                Once invalidated this cannot be reversed.
+              </div>
+            </div>
+          ) : null
+        }
+        requireReason
+        confirmText="Invalidate"
+        cancelText="Cancel"
+        onConfirm={handleInvalidate}
+        onCancel={() => setTarget(null)}
+      />
     </section>
   );
 }

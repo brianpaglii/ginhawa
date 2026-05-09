@@ -11,6 +11,7 @@ import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { AuthContext, type AuthContextValue } from "../auth/auth-context";
+import { ToastProvider } from "../components/Toast";
 import type { UserRead } from "../api/client";
 
 export const FAKE_BHW_USER: UserRead = {
@@ -55,9 +56,11 @@ export function renderWithProviders(
     auth ?? makeAuth({ user: FAKE_BHW_USER, status: "authenticated" });
   return render(
     <QueryClientProvider client={queryClient}>
-      <AuthContext.Provider value={authValue}>
-        <MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>
-      </AuthContext.Provider>
+      <ToastProvider>
+        <AuthContext.Provider value={authValue}>
+          <MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>
+        </AuthContext.Provider>
+      </ToastProvider>
     </QueryClientProvider>,
   );
 }

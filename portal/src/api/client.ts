@@ -308,6 +308,13 @@ class ApiClient {
     });
   }
 
+  invalidateMeasurement(id: string, reason: string): Promise<MeasurementRead> {
+    return this.request<MeasurementRead>(
+      `/api/v1/measurements/${encodeURIComponent(id)}/invalidate`,
+      { method: "PATCH", body: { reason } },
+    );
+  }
+
   listAuditLog(params: ListAuditLogParams = {}): Promise<Page<AuditLogRead>> {
     return this.request<Page<AuditLogRead>>("/api/v1/audit-log", {
       query: params,
