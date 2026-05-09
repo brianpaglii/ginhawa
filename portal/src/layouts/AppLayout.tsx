@@ -93,6 +93,19 @@ export function AppLayout() {
           <ul className={styles.navList}>
             <li>
               <NavLink
+                to="/dashboard"
+                onClick={closeMobileNav}
+                className={({ isActive }) =>
+                  isActive
+                    ? `${styles.navLink} ${styles.navLinkActive}`
+                    : styles.navLink
+                }
+              >
+                Dashboard
+              </NavLink>
+            </li>
+            <li>
+              <NavLink
                 to="/sessions"
                 onClick={closeMobileNav}
                 className={({ isActive }) =>
