@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+import structlog
 from sqlalchemy.orm import Session
 
 from ginhawa_kiosk.fsm import EventBus, MeasurementProposed
@@ -165,3 +166,61 @@ def test_load_device_id_returns_none_when_kiosk_id_missing(
 ) -> None:
     sub = MqttSensorSubscriber(bus, db_session)
     assert sub._load_device_id() is None
+
+
+# Verifies the success-path liveness log fires AFTER the event bus
+# accepts the message. journalctl grep for "mqtt.message_routed" is
+# the bench operator's success marker; without this log the
+# subscriber's reception is invisible without DB introspection.
+# Mortality: would fail if the log were demoted to debug, dropped,
+# moved before the event-bus publish, or stripped of any of the four
+# documented fields.
+@pytest.mark.asyncio
+async def test_handle_message_logs_on_success(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    db_session: Session,
+) -> None:
+    set_device_config(db_session, "kiosk_id", _DEVICE_ID)
+    sub = MqttSensorSubscriber(bus, db_session)
+
+    topic = f"ginhawa/kiosk/{_DEVICE_ID}/sensors/spo2"
+    payload = json.dumps(
+        {"value": 97.0, "unit": "%", "captured_at": "2026-05-09T12:00:00+00:00"}
+    ).encode()
+
+    with structlog.testing.capture_logs() as logs:
+        await sub._handle_message_payload(topic, payload)
+
+    # Event bus saw it (sanity: the log fires only after the publish).
+    assert len(captured_measurements) == 1
+
+    routed = [entry for entry in logs if entry.get("event") == "mqtt.message_routed"]
+    assert len(routed) == 1, f"expected 1 success log, got logs={logs!r}"
+    entry = routed[0]
+    assert entry["log_level"] == "info"
+    assert entry["topic"] == topic
+    assert entry["measurement_type"] == "spo2"
+    assert entry["value"] == 97.0
+    assert entry["unit"] == "%"
+
+
+# Verifies the success log does NOT fire on a malformed payload —
+# the warning path returns early, before _route_to_event. Pairs with
+# test_handle_message_logs_on_success: success and failure branches
+# have visibly different journal markers.
+@pytest.mark.asyncio
+async def test_handle_message_does_not_log_routed_on_malformed(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    db_session: Session,
+) -> None:
+    set_device_config(db_session, "kiosk_id", _DEVICE_ID)
+    sub = MqttSensorSubscriber(bus, db_session)
+
+    topic = f"ginhawa/kiosk/{_DEVICE_ID}/sensors/spo2"
+    with structlog.testing.capture_logs() as logs:
+        await sub._handle_message_payload(topic, b"not-json{{")
+
+    assert captured_measurements == []
+    assert all(entry.get("event") != "mqtt.message_routed" for entry in logs)

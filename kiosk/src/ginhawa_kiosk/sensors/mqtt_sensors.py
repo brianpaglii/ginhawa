@@ -259,6 +259,20 @@ class MqttSensorSubscriber(Sensor):
             )
             return
         await _route_to_event(self._bus, topic_suffix, value, unit)
+        # Liveness ping for bench testing — fires only AFTER the event
+        # bus accepted the message, so a journalctl grep for
+        # ``mqtt.message_routed`` is a reliable success marker. The
+        # measurement_type comes from the same routing dict
+        # _route_to_event used; double-lookup is cheap (in-memory dict)
+        # and keeps the log payload aligned with what subscribers see.
+        measurement_type = _TOPIC_ROUTES[topic_suffix][0]
+        self._logger.info(
+            "mqtt.message_routed",
+            topic=topic,
+            measurement_type=measurement_type,
+            value=value,
+            unit=unit,
+        )
 
 
 # ---------------------------------------------------------------------------
