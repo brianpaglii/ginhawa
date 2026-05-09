@@ -100,14 +100,25 @@ _BP_LOG_PROGRESS_EVERY_N = 5
 _BP_FRESHNESS_WINDOW_S = 180.0  # 3 minutes
 
 # Outer wall-clock budget for ONE drain phase, measured from the
-# moment notifications start flowing. The cuff dumps stored readings
-# within a few seconds of the indicate subscription, so this only
-# needs to span "drain stale readings + give the user a beat to
-# press START on the cuff again". 180 s gives a slow citizen room
-# to take the BP after pairing without timing out. When this drain
-# elapses without a fresh reading, the handler disconnects and
-# loops back to the connect retry — it does NOT give up.
-_BP_FRESH_READ_TIMEOUT_S = 180.0
+# moment notifications start flowing. The cuff dumps any stored
+# readings within ~5 s of the indicate subscription; after that the
+# cuff is silent until the user presses START. Shorter timeouts
+# mean faster reconnect cycles and less perceived delay while the
+# user is mid-fumble; longer timeouts mean fewer reconnects and
+# lower BLE adapter contention with the Xiaomi scanner. 30 s is
+# the pragmatic middle: long enough that an in-progress measurement
+# can finish and emit, short enough that the user doesn't think the
+# kiosk has frozen. The earlier 180 s value matched the freshness
+# window by coincidence and dominated the bench-measured "card tap
+# to fresh capture" cycle; reducing it to 30 s shaves ~150 s off
+# the worst case without making the request handler give up — the
+# outer connect loop reconnects and drains again on every drain
+# timeout, indefinitely until cancellation.
+#
+# Independent of _BP_FRESHNESS_WINDOW_S above: that's the
+# "fresh-vs-stale" boundary on a reading's payload timestamp; this
+# is the wait-for-notification budget at the BLE-subscribe level.
+_BP_FRESH_READ_TIMEOUT_S = 30.0
 
 
 # ---------------------------------------------------------------------------
