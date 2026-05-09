@@ -315,6 +315,20 @@ class SyncDaemon:
             )
             session.commit()
 
+        # Heartbeat. The sync_attempt audit row above is the durable
+        # trace, but it lives inside the encrypted SQLite — invisible
+        # to journalctl. After a cycle completes, surface the per-type
+        # counts at INFO so an operator tailing the unit can answer
+        # "is sync alive?" without opening the kiosk DB. An empty-
+        # counts emission (kiosk caught up) is intentional — it's
+        # the liveness signal.
+        self._logger.info(
+            "sync.cycle_complete",
+            citizens=dict(citizen_counts),
+            sessions=dict(session_counts),
+            measurements=dict(measurement_counts),
+        )
+
     # ---- per-type cycle helpers ---------------------------------------
 
     async def _sync_citizens(self, session: Session) -> Counter[str]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -468,3 +469,119 @@ async def test_run_propagates_unexpected_error() -> None:
     # Daemon did not stop "cleanly" — the credential-error flag is
     # still False because the exception bypassed that branch.
     assert daemon.stopped_due_to_credential_error is False
+
+
+# ---------------------------------------------------------------------
+# run_once() heartbeat — sync.cycle_complete on success
+# ---------------------------------------------------------------------
+# These tests stub the per-type sync helpers so the heartbeat
+# semantics are exercised without needing a real cloud round-trip
+# or the encrypted-DB conftest fixture (which depends on the
+# system sqlcipher3 module that isn't installed on every dev box).
+# Behavioural coverage of the per-type helpers themselves is the
+# job of test_daemon_marks_synced_on_created etc. above.
+
+
+class _NullSession:
+    """Stand-in for a SQLAlchemy Session inside run_once.
+
+    Only the surface run_once touches is implemented: the context-
+    manager protocol, ``commit()``, plus whatever record_audit
+    pokes. ``record_audit`` is monkey-patched to a no-op in the
+    tests below, so we don't need to model audit_log here.
+    """
+
+    def __enter__(self) -> "_NullSession":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def commit(self) -> None:
+        return None
+
+
+def _stub_daemon_with_session_factory() -> tuple[SyncDaemon, CapturingLogger]:
+    from typing import cast
+
+    logger = CapturingLogger()
+
+    def _factory() -> _NullSession:
+        return _NullSession()
+
+    daemon = SyncDaemon(
+        session_factory=cast(sessionmaker[Session], _factory),
+        cloud=cast(CloudClient, None),
+        interval_seconds=0.01,
+        logger=logger,
+    )
+    return daemon, logger
+
+
+# Verifies the daemon emits sync.cycle_complete at INFO with the
+# per-type counts after a successful cycle. The empty-Counter case
+# is part of the contract — an idle kiosk should still produce a
+# heartbeat line so journalctl shows the daemon is alive.
+# Mortality: would fail if the heartbeat was dropped, demoted, or
+# the count fields drifted to a different shape.
+@pytest.mark.asyncio
+async def test_run_once_logs_cycle_complete_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    daemon, logger = _stub_daemon_with_session_factory()
+
+    async def fake_citizens(_session: Session) -> Counter[str]:
+        return Counter({"created": 2})
+
+    async def fake_sessions(_session: Session) -> Counter[str]:
+        return Counter()
+
+    async def fake_measurements(_session: Session) -> Counter[str]:
+        return Counter({"created": 5})
+
+    daemon._sync_citizens = fake_citizens  # type: ignore[method-assign]
+    daemon._sync_sessions = fake_sessions  # type: ignore[method-assign]
+    daemon._sync_measurements = fake_measurements  # type: ignore[method-assign]
+    # The heartbeat lives in run_once but the audit-row write
+    # touches DB plumbing we don't want to model here. Patching
+    # record_audit at its import site in the daemon module makes
+    # the call a no-op.
+    monkeypatch.setattr(
+        "ginhawa_kiosk.sync.daemon.record_audit",
+        lambda *args, **kwargs: None,
+    )
+
+    await daemon.run_once()
+
+    heartbeats = [e for e in logger.events if e[1] == "sync.cycle_complete"]
+    assert len(heartbeats) == 1
+    level, _event, kwargs = heartbeats[0]
+    assert level == "info"
+    assert kwargs["citizens"] == {"created": 2}
+    assert kwargs["sessions"] == {}
+    assert kwargs["measurements"] == {"created": 5}
+
+
+# Verifies that when one of the per-type helpers raises
+# CloudUnavailable mid-cycle, the heartbeat does NOT fire — the
+# warning emitted inside the helper is the trace for that case.
+# A heartbeat saying "all good" after a partially-failed cycle
+# would mislead the operator.
+# Mortality: would fail if a future refactor moved the heartbeat
+# to a finally-block or before the per-type calls.
+@pytest.mark.asyncio
+async def test_run_once_does_not_log_cycle_complete_on_failure() -> None:
+    from ginhawa_kiosk.sync.client import CloudUnavailable
+
+    daemon, logger = _stub_daemon_with_session_factory()
+
+    async def fake_citizens(_session: Session) -> Counter[str]:
+        raise CloudUnavailable("network down")
+
+    daemon._sync_citizens = fake_citizens  # type: ignore[method-assign]
+
+    with pytest.raises(CloudUnavailable):
+        await daemon.run_once()
+
+    heartbeats = [e for e in logger.events if e[1] == "sync.cycle_complete"]
+    assert heartbeats == []
