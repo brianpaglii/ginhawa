@@ -86,6 +86,7 @@ def settings_with_test_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KIOSK_DB_KEY", "test_key_for_gui_tests" + "_" * 30)
     monkeypatch.setenv("KIOSK_API_KEY", "test_api_key_for_gui" + "_" * 30)
     monkeypatch.setenv("KIOSK_DEVICE_ID", _TEST_DEVICE_ID)
+    monkeypatch.setenv("MQTT_PASSWORD", "test_mqtt_pass_for_gui" + "_" * 20)
     from ginhawa_kiosk.core.config import get_settings
 
     get_settings.cache_clear()

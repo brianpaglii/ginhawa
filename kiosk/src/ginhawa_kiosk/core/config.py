@@ -61,14 +61,15 @@ class Settings(BaseSettings):
     # --- Local broker ----------------------------------------------------
     MQTT_BROKER_HOST: str = "localhost"
     MQTT_BROKER_PORT: int = 1883
-    # Mosquitto auth — empty defaults so MOCK_HARDWARE / dev paths don't
-    # need to set them. In production the broker rejects anonymous
-    # publishers (allow_anonymous false) so both fields MUST be set in
-    # the kiosk's environment file. The subscriber treats either field
-    # being empty as "no auth"; the broker will then refuse the
-    # connection, which is the right loud-failure behaviour.
-    MQTT_USERNAME: str = ""
-    MQTT_PASSWORD: str = ""
+    # Mosquitto auth. Username has a sensible default that matches the
+    # ACL we ship (``ginhawa_kiosk`` — underscore, not hyphen; mosquitto
+    # treats them as different identities). Password is REQUIRED — it
+    # must come from kiosk.env at runtime, never a literal in source.
+    # Production Mosquitto rejects anonymous connects (allow_anonymous
+    # false), so a missing password should fail loud at boot rather
+    # than silently degrade to an unauthenticated retry loop.
+    MQTT_USERNAME: str = "ginhawa_kiosk"
+    MQTT_PASSWORD: str
 
     # --- Thermal printer (ESC/POS over USB; portable across vendors) -----
     # VID/PID. Default is the Xprinter XP-58IIH (0x0416 / 0x5011); override
@@ -116,7 +117,12 @@ class Settings(BaseSettings):
     # --- Mode switch (see module docstring) -----------------------------
     MOCK_HARDWARE: bool = False
 
-    @field_validator("KIOSK_DB_KEY", "KIOSK_API_KEY", "KIOSK_DEVICE_ID")
+    @field_validator(
+        "KIOSK_DB_KEY",
+        "KIOSK_API_KEY",
+        "KIOSK_DEVICE_ID",
+        "MQTT_PASSWORD",
+    )
     @classmethod
     def _reject_empty_secret(cls, v: str) -> str:
         if not v.strip():

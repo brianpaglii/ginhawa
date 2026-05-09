@@ -18,6 +18,7 @@ _REQUIRED_ENV: dict[str, str] = {
     "KIOSK_DB_KEY": "smoke-test-db-key",  # pragma: allowlist secret
     "KIOSK_API_KEY": "smoke-test-api-key",  # pragma: allowlist secret
     "KIOSK_DEVICE_ID": "00000000-0000-0000-0000-000000000401",
+    "MQTT_PASSWORD": "smoke-test-mqtt-pass",  # pragma: allowlist secret
 }
 
 
