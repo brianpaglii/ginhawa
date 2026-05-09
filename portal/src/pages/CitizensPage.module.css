@@ -36,9 +36,9 @@
 }
 
 .search:focus {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--color-primary);
   outline-offset: -1px;
-  border-color: #2563eb;
+  border-color: var(--color-primary);
 }
 
 .tableWrap {

@@ -20,24 +20,36 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-  font-weight: 600;
+  gap: 0.6rem;
+  color: var(--color-text);
+}
+
+.brandMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.brandText {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.05;
+}
+
+.brandTitle {
+  font-weight: 700;
   font-size: 1.05rem;
   letter-spacing: 0.04em;
   color: var(--color-text);
 }
 
-.brandMark {
-  width: 26px;
-  height: 26px;
-  border-radius: 999px;
-  background: var(--color-primary);
-  color: #ffffff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 0.85rem;
+.brandSubtitle {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  letter-spacing: 0.02em;
+  margin-top: 1px;
 }
 
 .spacer {
@@ -158,6 +170,12 @@
     display: inline-flex;
   }
   .user {
+    display: none;
+  }
+  /* Drop the brand subtitle on phones — the title alone is enough,
+     and the saved horizontal real estate keeps the user/logout
+     controls from wrapping. */
+  .brandSubtitle {
     display: none;
   }
   .body {

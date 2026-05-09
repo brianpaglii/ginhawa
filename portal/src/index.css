@@ -1,41 +1,46 @@
 /* ---------------------------------------------------------------
    Color tokens — single source of truth for theme colors. New code
    should reference these via var(--color-*) instead of hardcoded
-   hex values. Existing module CSS still has hex literals; those
-   match these tokens by construction so re-skinning later is a
-   token swap, not a global find/replace.
+   hex values. Palette: teal-green health primary (#2A9D8F) with
+   warm secondary (#E9C46A) and warm-red danger (#E76F51), grounded
+   on cool blue-gray text (#2C3E50). Refresh: changing the palette
+   should be a token swap, not a global find/replace.
 --------------------------------------------------------------- */
 :root {
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
-  --color-primary-bg: #dbeafe;
-  --color-primary-fg: #1e3a8a;
+  --color-primary: #2a9d8f;
+  --color-primary-hover: #21867a;
+  --color-primary-bg: #d8f0ec;
+  --color-primary-fg: #1a6760;
+  --color-primary-ring: rgba(42, 157, 143, 0.22);
 
-  --color-success: #047857;
-  --color-success-bg: #d1fae5;
-  --color-success-fg: #065f46;
+  --color-secondary: #e9c46a;
 
-  --color-warning: #92400e;
-  --color-warning-bg: #fef3c7;
-  --color-warning-fg: #92400e;
+  /* Success uses the primary teal — health context, "good" === primary. */
+  --color-success: #2a9d8f;
+  --color-success-bg: #d8f0ec;
+  --color-success-fg: #1a6760;
 
-  --color-danger: #b91c1c;
-  --color-danger-bg: #fee2e2;
-  --color-danger-fg: #991b1b;
-  --color-danger-border: #fca5a5;
+  --color-warning: #f4a261;
+  --color-warning-bg: #fcead3;
+  --color-warning-fg: #8a4a12;
 
-  --color-text: #111827;
-  --color-text-secondary: #374151;
-  --color-text-muted: #6b7280;
+  --color-danger: #e76f51;
+  --color-danger-bg: #fbe0d8;
+  --color-danger-fg: #a33a22;
+  --color-danger-border: #f2a993;
 
-  --color-bg: #f6f7f9;
+  --color-text: #2c3e50;
+  --color-text-secondary: #495057;
+  --color-text-muted: #6c757d;
+
+  --color-bg: #f8f9fa;
   --color-surface: #ffffff;
-  --color-surface-alt: #f9fafb;
-  --color-hover: #f3f4f6;
+  --color-surface-alt: #f1f3f5;
+  --color-hover: #edeff2;
 
-  --color-border: #d8dde3;
-  --color-border-subtle: #e5e7eb;
-  --color-border-input: #d1d5db;
+  --color-border: #dee2e6;
+  --color-border-subtle: #e9ecef;
+  --color-border-input: #ced4da;
 
   --radius-sm: 6px;
   --radius-md: 8px;

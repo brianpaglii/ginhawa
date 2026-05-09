@@ -67,9 +67,30 @@ export function AppLayout() {
         </button>
         <span className={styles.brand}>
           <span className={styles.brandMark} aria-hidden>
-            G
+            <svg viewBox="0 0 64 64" width="22" height="22">
+              <circle cx="32" cy="32" r="30" fill="currentColor" />
+              <rect
+                x="27"
+                y="14"
+                width="10"
+                height="36"
+                rx="2"
+                fill="#ffffff"
+              />
+              <rect
+                x="14"
+                y="27"
+                width="36"
+                height="10"
+                rx="2"
+                fill="#ffffff"
+              />
+            </svg>
           </span>
-          GINHAWA
+          <span className={styles.brandText}>
+            <span className={styles.brandTitle}>GINHAWA</span>
+            <span className={styles.brandSubtitle}>Health Kiosk Portal</span>
+          </span>
         </span>
         <div className={styles.spacer} />
         {user !== null && (
@@ -151,7 +172,9 @@ export function AppLayout() {
           <Outlet />
         </main>
       </div>
-      <footer className={styles.footer}>GINHAWA Health Kiosk · v0.1</footer>
+      <footer className={styles.footer}>
+        GINHAWA · Barangay Health Worker Portal · v0.1.0
+      </footer>
     </div>
   );
 }

@@ -1,73 +1,148 @@
-# React + TypeScript + Vite
+# GINHAWA Portal
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Web portal for Barangay Health Workers (BHWs) to review kiosk-captured
+health measurements. Companion to the [GINHAWA kiosk](../kiosk) and
+[cloud backend](../cloud).
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Username/password login (JWT auth)
+- Dashboard with KPIs, sessions-per-day chart, path breakdown, recent
+  activity
+- Sessions list with filters (status, path, date, citizen, barangay)
+- Session detail with measurements, citizen lookup, and audit timeline
+- Citizens directory with detail pages
+- Audit log (admin-only) with action and date filters
+- Measurement invalidate flow (admin-only) with reason capture
 
-## React Compiler
+## Tech stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- React 19 + TypeScript (strict mode)
+- Vite for build/dev
+- React Router v7
+- TanStack Query v5 for server state
+- Recharts for the dashboard charts
+- MSW for component-level testing
+- Plain CSS modules + a single token file (`src/index.css`); no Tailwind,
+  no UI library
 
-## Expanding the ESLint configuration
+## Setup
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Prerequisites
 
-```js
-export default defineConfig([
-  globalIgnores(["dist"]),
-  {
-    files: ["**/*.{ts,tsx}"],
-    extends: [
-      // Other configs...
+- Node.js 20+
+- GINHAWA cloud reachable at `http://127.0.0.1:8000` (or set
+  `VITE_CLOUD_API_URL`)
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+### Install
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-]);
+```
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Run dev server
 
-```js
-// eslint.config.js
-import reactX from "eslint-plugin-react-x";
-import reactDom from "eslint-plugin-react-dom";
-
-export default defineConfig([
-  globalIgnores(["dist"]),
-  {
-    files: ["**/*.{ts,tsx}"],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs["recommended-typescript"],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-]);
 ```
+npm run dev
+```
+
+Opens on http://localhost:5173.
+
+### Build
+
+```
+npm run build
+```
+
+Output goes to `dist/`.
+
+### Test and lint
+
+```
+npm run test
+npm run lint
+```
+
+## Demo credentials (dev only)
+
+Created by the cloud's `seed_dev_data.py` script. **Do not use in
+production.**
+
+| Username           | Password                        | Role  |
+| ------------------ | ------------------------------- | ----- |
+| `admin`            | `seed_admin_password_change_me` | admin |
+| `bhw_tibagan`      | `seed_bhw_password`             | bhw   |
+| `bhw_pinaglabanan` | `seed_bhw_password`             | bhw   |
+| `bhw_corazon`      | `seed_bhw_password`             | bhw   |
+
+## Configuration
+
+Environment variables (`.env.development`):
+
+- `VITE_CLOUD_API_URL` — cloud API base URL (default
+  `http://127.0.0.1:8000`)
+
+## Architecture
+
+```
+src/
+  api/         API client, error types, token storage
+  auth/        AuthContext, useAuth hook, AuthProvider
+  components/  Reusable UI (ConfirmModal, Toast, Skeleton, EmptyState,
+               StatusPill, ErrorBoundary, Pagination)
+  hooks/       Query hooks (useDashboardStats, useCitizens, …)
+  layouts/     AppLayout (header, sidebar, footer)
+  pages/       Route-level pages (Login, Dashboard, Sessions,
+               SessionDetail, Citizens, CitizenDetail, AuditLog)
+  utils/       Pure utilities (date math, dashboard aggregations)
+  __tests__/   Vitest + MSW integration tests
+  index.css    Color tokens (single source of truth) + base styles
+```
+
+Notable conventions:
+
+- Hand-written API types mirror the cloud's pydantic schemas; we
+  intentionally do not use openapi-typescript codegen so the contract
+  reads as documentation.
+- Server state is owned by TanStack Query. Local state stays in
+  `useState`/`useReducer`. There is no Redux.
+- Color tokens live in `src/index.css` under `:root`. Re-skinning is a
+  token swap, not a global find-and-replace.
+- Tables that opt into the `responsive-table` class collapse to
+  card-style rows under 768px; each `<td>` carries a `data-label`
+  attribute that becomes the row label on mobile.
+
+## Deployment
+
+Build with `npm run build`, then serve `dist/` from any static host
+(nginx, Apache, S3+CloudFront, Caddy). Configure the reverse proxy to
+forward `/api/v1/*` to the cloud API and to fall back to `/index.html`
+for client-side routes (SPA fallback).
+
+A minimal nginx snippet:
+
+```nginx
+server {
+  root /var/www/ginhawa-portal;
+  index index.html;
+
+  location /api/ {
+    proxy_pass http://cloud.internal:8000;
+  }
+
+  location / {
+    try_files $uri /index.html;
+  }
+}
+```
+
+## Demo notes
+
+- The portal's `localhost` dev server expects the cloud at
+  `127.0.0.1:8000`. Run the cloud first, seed the DB, then start the
+  portal — login fails fast otherwise (no offline fallback).
+- The dashboard's data window is 14 days; if you've just seeded the DB,
+  use the seed script's `--days-back` flag to populate enough sessions
+  for the chart to look populated.
+- The measurement invalidate flow is admin-only. Sign in as `admin` to
+  see the "Invalidate" button on a session-detail row.

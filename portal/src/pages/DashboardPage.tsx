@@ -31,23 +31,24 @@ import {
 } from "../utils/dashboard-stats";
 import styles from "./DashboardPage.module.css";
 
-// Status palette for the stacked bar chart. Mirrors the StatusPill
-// colors (defined in components/StatusPill.module.css) so the chart
-// reads consistently with status pills elsewhere on the page.
+// Status palette for the stacked bar chart. Mirrors the v2 brand
+// palette: teal-green for "good" outcomes, warm orange for soft-fail
+// (aborted), warm-red for hard-fail (error), neutral for in-progress.
 const STATUS_COLOR = {
-  completed: "#047857",
-  aborted: "#f59e0b",
+  completed: "#2a9d8f",
+  aborted: "#f4a261",
   in_progress: "#9ca3af",
-  error: "#dc2626",
+  error: "#e76f51",
 } as const;
 
 // Donut palette for measurement paths. Distinct hues so the slices
 // are visually separable; the order matches the legend below the
-// chart.
+// chart. Anchored on the brand teal with a complementary blue and
+// warm yellow for separation.
 const PATH_COLOR: Record<keyof PathBreakdown, string> = {
-  vitals: "#2563eb",
-  anthropometric: "#7c3aed",
-  full: "#10b981",
+  vitals: "#2a9d8f",
+  anthropometric: "#264653",
+  full: "#e9c46a",
   unknown: "#9ca3af",
 };
 
@@ -205,7 +206,7 @@ function SessionsByDayChart({ buckets }: { buckets: SessionsByDayBucket[] }) {
               />
               <Tooltip
                 contentStyle={{ fontSize: "0.85rem" }}
-                cursor={{ fill: "rgba(37, 99, 235, 0.06)" }}
+                cursor={{ fill: "rgba(42, 157, 143, 0.08)" }}
               />
               <Bar
                 dataKey="completed"

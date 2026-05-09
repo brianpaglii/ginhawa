@@ -1,12 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <circle cx="32" cy="32" r="30" fill="#2563eb" />
-  <text
-    x="32"
-    y="44"
-    font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
-    font-size="38"
-    font-weight="700"
-    text-anchor="middle"
-    fill="#ffffff"
-  >G</text>
+  <circle cx="32" cy="32" r="30" fill="#2a9d8f" />
+  <rect x="27" y="14" width="10" height="36" rx="2" fill="#ffffff" />
+  <rect x="14" y="27" width="36" height="10" rx="2" fill="#ffffff" />
 </svg>

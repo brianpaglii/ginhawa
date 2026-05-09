@@ -25,16 +25,10 @@
 }
 
 .brandMark {
-  width: 36px;
-  height: 36px;
-  border-radius: 999px;
-  background: var(--color-primary);
-  color: #ffffff;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
-  font-size: 1.05rem;
+  color: var(--color-primary);
 }
 
 .title {
@@ -79,7 +73,7 @@
 .input:focus {
   outline: none;
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+  box-shadow: 0 0 0 3px var(--color-primary-ring);
 }
 
 .input:disabled {

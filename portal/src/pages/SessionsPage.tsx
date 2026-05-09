@@ -312,7 +312,7 @@ export function SessionsPage() {
           <EmptyState
             icon={SessionsEmptyIcon}
             title="No sessions yet"
-            message="Sessions appear here as kiosks sync. Citizens scanning their RFID at a kiosk will create entries automatically."
+            message="Sessions appear here as kiosks sync. Each kiosk session is created when a citizen taps their RFID card."
           />
         )
       ) : (

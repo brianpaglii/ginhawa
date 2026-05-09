@@ -61,7 +61,7 @@
 .filterSelect:focus {
   outline: none;
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+  box-shadow: 0 0 0 3px var(--color-primary-ring);
 }
 
 .filterActions {

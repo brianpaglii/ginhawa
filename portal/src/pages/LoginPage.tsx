@@ -33,11 +33,29 @@ export function LoginPage() {
       <form className={styles.card} onSubmit={onSubmit} noValidate>
         <div className={styles.brand}>
           <span className={styles.brandMark} aria-hidden>
-            G
+            <svg viewBox="0 0 64 64" width="36" height="36">
+              <circle cx="32" cy="32" r="30" fill="currentColor" />
+              <rect
+                x="27"
+                y="14"
+                width="10"
+                height="36"
+                rx="2"
+                fill="#ffffff"
+              />
+              <rect
+                x="14"
+                y="27"
+                width="36"
+                height="10"
+                rx="2"
+                fill="#ffffff"
+              />
+            </svg>
           </span>
           <h1 className={styles.title}>GINHAWA</h1>
         </div>
-        <p className={styles.subtitle}>BHW portal sign-in</p>
+        <p className={styles.subtitle}>Barangay Health Worker Portal</p>
 
         {error !== null && (
           <div role="alert" className={styles.error}>
@@ -78,7 +96,11 @@ export function LoginPage() {
           />
         </div>
 
-        <button type="submit" className={styles.submit} disabled={submitting}>
+        <button
+          type="submit"
+          className={styles.submit}
+          disabled={submitting || username.trim() === "" || password === ""}
+        >
           {submitting ? "Signing in…" : "Sign in"}
         </button>
       </form>

@@ -59,9 +59,9 @@
 
 .filterInput:focus,
 .filterSelect:focus {
-  outline: 2px solid #2563eb;
+  outline: 2px solid var(--color-primary);
   outline-offset: -1px;
-  border-color: #2563eb;
+  border-color: var(--color-primary);
 }
 
 .filterActions {
@@ -152,7 +152,7 @@
 }
 
 .objectLink {
-  color: #2563eb;
+  color: var(--color-primary);
   text-decoration: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85rem;
@@ -179,7 +179,7 @@
   appearance: none;
   border: none;
   background: none;
-  color: #2563eb;
+  color: var(--color-primary);
   font-size: 0.8rem;
   cursor: pointer;
   padding: 0;

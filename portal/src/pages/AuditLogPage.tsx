@@ -314,7 +314,7 @@ function renderTable(
     return (
       <EmptyState
         icon={AuditEmptyIcon}
-        title="No audit entries match your filters"
+        title="No audit entries match the current filter"
         message="Try widening the date range or clearing the filters above."
       />
     );

@@ -126,8 +126,8 @@ export function CitizensPage() {
         ) : (
           <EmptyState
             icon={CitizensEmptyIcon}
-            title="No citizens registered yet"
-            message="Citizens appear here as they register at a kiosk or are added by a barangay health worker."
+            title="No citizens registered"
+            message="Citizens are added during their first kiosk visit, when they tap a new RFID card."
           />
         )
       ) : (

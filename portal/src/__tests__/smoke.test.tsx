@@ -12,6 +12,9 @@ describe("smoke", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Username")).toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Sign in" })).toBeEnabled();
+    // Submit starts disabled (both fields blank) and only enables when
+    // the user has typed something into both — guards against
+    // accidental enter-key submits with empty creds.
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeDisabled();
   });
 });
