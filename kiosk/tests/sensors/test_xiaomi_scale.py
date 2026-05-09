@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from ginhawa_kiosk.fsm import EventBus, MeasurementProposed, SessionResetForSensors
 from ginhawa_kiosk.sensors.base import SensorUnavailable
 from ginhawa_kiosk.sensors.xiaomi_scale import (
+    _GATE_WARMUP_SECONDS,
+    _WeightStabilityGate,
     MockXiaomiScale,
     XiaomiScaleSensor,
     extract_mass_kg,
@@ -44,6 +46,19 @@ def _signal_strength_only_advertisement() -> dict[str, Any]:
 async def _feed_kg(sensor: XiaomiScaleSensor, *values: float) -> None:
     for v in values:
         await sensor._on_sensor_update(_mass_advertisement(v))
+
+
+def _skip_gate_warmup(sensor: XiaomiScaleSensor) -> None:
+    """Backdate the gate's unlock timestamp so the post-unlock warmup
+    window has already elapsed. Tests that exercise the
+    publish → reset → re-publish cycle care about gate semantics, not
+    real-time scheduling; the warmup is a production race fix that
+    these tests would otherwise have to wait 8 seconds to clear.
+    Safe to call when the gate has never been unlocked (the field is
+    None) — the early-return inside accept() already covers that
+    case."""
+    if sensor._gate._unlocked_at is not None:
+        sensor._gate._unlocked_at -= 1_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +230,7 @@ async def test_session_lock_releases_on_reset(
     # Reset (direct method call — exercises the public surface that
     # the bus path delegates to).
     sensor.reset_for_new_session()
+    _skip_gate_warmup(sensor)
 
     # Second session: another publish.
     await _feed_kg(sensor, 65.0, 65.0, 65.0)
@@ -276,6 +292,7 @@ async def test_session_reset_via_bus_event_unlocks_gate(
 
     await bus.publish(SessionResetForSensors())
     assert sensor._gate.is_locked() is False
+    _skip_gate_warmup(sensor)
 
     await _feed_kg(sensor, 60.0, 60.0, 60.0)
     assert len(captured_measurements) == 2
@@ -302,8 +319,89 @@ async def test_mock_xiaomi_scale_uses_stability_gate(
     assert len(captured_measurements) == 1
 
     scale.reset_for_new_session()
+    # Same warmup-skip dance as the real-sensor tests above — see the
+    # _skip_gate_warmup docstring for why these tests don't wait
+    # 8 seconds of wall-clock time.
+    if scale._gate._unlocked_at is not None:
+        scale._gate._unlocked_at -= 1_000.0
     await scale.simulate_weight(72.0)
     await scale.simulate_weight(72.0)
     await scale.simulate_weight(72.0)
     assert len(captured_measurements) == 2
     assert captured_measurements[1].value == pytest.approx(72.0)
+
+
+# ---------------------------------------------------------------------------
+# Post-unlock warmup window
+# ---------------------------------------------------------------------------
+#
+# Bench (2026-05-09) showed weight publishes within 50 ms – 1 s of
+# the gate_unlocked event — far faster than 3 stable readings × 5 s
+# broadcast cadence allows. Either the BleAdapterLock pause/resume
+# cycle re-delivers cached advertisements when the scanner resumes,
+# or xiaomi-ble caches state internally and emits on next event
+# regardless of buffer history. The warmup window in
+# _WeightStabilityGate.accept() drops readings for ``warmup_seconds``
+# after each unlock so the buffer can only fill with genuinely-fresh
+# readings from the citizen who just stepped on.
+
+
+# Verifies the warmup drops readings that arrive immediately after
+# unlock. Mortality: would fail if the warmup check were removed,
+# placed AFTER the buffer append (so the buffer would still capture
+# stale readings), or if the constant were lowered to a value
+# smaller than typical broadcast jitter.
+def test_gate_drops_readings_during_warmup_window() -> None:
+    gate = _WeightStabilityGate()
+    gate.unlock()
+    # Three back-to-back accepts, each well within the 8 s warmup,
+    # all return None and DON'T fill the buffer.
+    assert gate.accept(70.0) is None
+    assert gate.accept(70.0) is None
+    assert gate.accept(70.0) is None
+    # Buffer is still empty — the warmup short-circuited before
+    # append. (The readings would have triggered a publish in the
+    # absence of warmup, since they're K stable values.)
+    assert len(gate._buffer) == 0
+
+
+# Verifies once the warmup elapses the gate behaves normally:
+# K stable readings publish the median. Uses a constructor-injected
+# warmup_seconds=0.0 to make the test deterministic without
+# real-time waits or time.monotonic patching.
+def test_gate_accepts_after_warmup_elapsed() -> None:
+    gate = _WeightStabilityGate(warmup_seconds=0.0)
+    gate.unlock()
+    # warmup is 0 — first reading already passes the gate.
+    assert gate.accept(70.0) is None  # buffer fills, len<K
+    assert gate.accept(70.0) is None  # buffer fills, len<K
+    published = gate.accept(70.0)  # buffer full + stable → publish
+    assert published == pytest.approx(70.0)
+
+
+# Verifies the warmup does NOT apply on a fresh gate (no prior
+# unlock). _unlocked_at is None on a freshly-constructed gate, and
+# the early-return path inside accept() must skip the warmup check
+# entirely — otherwise every kiosk boot would lose its first
+# weight to the warmup window. The default-warmup constant is used
+# here intentionally: this is the production code path.
+def test_gate_warmup_does_not_apply_before_first_unlock() -> None:
+    gate = _WeightStabilityGate()  # default _GATE_WARMUP_SECONDS
+    assert gate._unlocked_at is None
+    # Three stable readings → publish immediately, even though no
+    # 8-second wait has elapsed since gate construction.
+    assert gate.accept(70.0) is None
+    assert gate.accept(70.0) is None
+    published = gate.accept(70.0)
+    assert published == pytest.approx(70.0)
+
+
+# Sanity check that the prod constant is in the documented ballpark
+# (one full broadcast cycle plus margin). Mortality: would fail if
+# someone tuned the constant to a sub-cycle value, which would
+# defeat the warmup's purpose (one cached broadcast at ~5 s after
+# unlock could still satisfy the gate).
+def test_gate_warmup_constant_covers_full_broadcast_cycle() -> None:
+    # Xiaomi S200 broadcasts every ~5 s. Warmup must cover at least
+    # one full cycle so a single cached re-emission can't slip past.
+    assert _GATE_WARMUP_SECONDS >= 5.0

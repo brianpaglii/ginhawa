@@ -62,6 +62,18 @@ _SOURCE_DEVICE = "xiaomi_s200_ble"
 # stepping off and on, or two people sharing the scale).
 _WEIGHT_STABILITY_BUFFER_K = 3
 _WEIGHT_STABILITY_TOLERANCE_KG = 0.2
+# Warmup window after gate unlock. Bench evidence (2026-05-09):
+# weight publishes were observed within 50 ms – 1 s of the
+# gate_unlocked event, far faster than 3 stable readings × 5 s
+# broadcast cadence allows. Either the BleAdapterLock pause/resume
+# cycle re-delivers cached advertisements when the scanner resumes,
+# or xiaomi-ble caches state and emits on next event regardless of
+# the gate's buffer history. Either way, dropping incoming readings
+# for one full broadcast cycle plus margin guarantees the buffer
+# fills with genuinely-fresh readings from the citizen who just
+# stepped on. ~8 s is one cycle (5 s) plus margin and is well under
+# the dwell window the user already needs to stand on the scale.
+_GATE_WARMUP_SECONDS = 8.0
 
 
 # ---------------------------------------------------------------------------
@@ -90,16 +102,34 @@ class _WeightStabilityGate:
         *,
         buffer_k: int = _WEIGHT_STABILITY_BUFFER_K,
         tolerance_kg: float = _WEIGHT_STABILITY_TOLERANCE_KG,
+        warmup_seconds: float = _GATE_WARMUP_SECONDS,
     ) -> None:
         self._k = buffer_k
         self._tolerance = tolerance_kg
+        self._warmup_seconds = warmup_seconds
         self._buffer: deque[float] = deque(maxlen=buffer_k)
         self._locked = False
+        # Set on every unlock(); ``None`` for a freshly-constructed
+        # gate (no warmup applied to the first session, since the
+        # cached-broadcast race only occurs across an unlock cycle).
+        self._unlocked_at: float | None = None
 
     def accept(self, value: float) -> float | None:
         """Feed one reading; return the publish value if stable, else None."""
         if self._locked:
             return None
+        # Warmup window: drop readings for ``_warmup_seconds`` after
+        # the most recent unlock. The Xiaomi-BLE library and/or the
+        # BleAdapterLock pause/resume cycle can replay cached
+        # advertisements when the scanner resumes; without this gate
+        # the buffer fills with stale readings from before the
+        # citizen actually stepped on, and a single ~5 s broadcast
+        # can publish a stale weight in <1 s. _unlocked_at is None
+        # only on a fresh gate (no prior unlock) — that path skips
+        # the warmup check entirely.
+        if self._unlocked_at is not None:
+            if time.monotonic() - self._unlocked_at < self._warmup_seconds:
+                return None
         self._buffer.append(value)
         if len(self._buffer) < self._k:
             return None
@@ -113,6 +143,7 @@ class _WeightStabilityGate:
         """Release the lock and clear the buffer for a fresh session."""
         self._locked = False
         self._buffer.clear()
+        self._unlocked_at = time.monotonic()
 
     def is_locked(self) -> bool:
         return self._locked
