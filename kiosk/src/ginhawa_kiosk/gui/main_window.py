@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session as SAOrmSession
 
 from ..db.models import Citizen, Measurement
 from ..fsm import (
+    BpMeasurementRequestCancelled,
     BpMeasurementRequested,
     EventBus,
     FsmSnapshot,
@@ -129,10 +130,18 @@ _ANTHRO_TYPES = {"height", "weight"}
 # - SpO2 + temperature + height all flow over MQTT (MAX30100 +
 #   MLX90614 + HC-SR04 on the ESP32 nodes).
 # - Weight comes from the Xiaomi scale over BLE.
+# BP types (systolic_bp / diastolic_bp / heart_rate) are intentionally
+# OMITTED from this map. Unlike SpO2 / temperature / height — whose
+# transport (MQTT) is binary up-or-down — the BP path is gated on the
+# citizen's physical interaction with the cuff (place, take BP, press
+# BT button) and can take an unpredictable amount of time. Seeding
+# is_valid=0 placeholders for BP at MEASURING_VITALS entry would
+# advance the path before the cuff has a chance to deliver, masking
+# real readings behind sensor_offline rows. The Omron handler retries
+# indefinitely until the citizen cancels (BpMeasurementRequestCancelled
+# from the GUI), so the path completion path WILL block on BP — that's
+# intentional, the user is the bound.
 _TYPE_TO_SENSOR_NAME: dict[str, str] = {
-    "systolic_bp": "omron_bp",
-    "diastolic_bp": "omron_bp",
-    "heart_rate": "omron_bp",
     "spo2": "mqtt_sensors",
     "temperature": "mqtt_sensors",
     "height": "mqtt_sensors",
@@ -240,6 +249,13 @@ class KioskMainWindow(QMainWindow):
         # placeholders so we don't double-seed if the user re-enters
         # a measuring state mid-session (e.g., after Cancel-back).
         self._offline_placeholders_seeded: set[str] = set()
+
+        # Previous FSM state, tracked so we can publish
+        # BpMeasurementRequestCancelled when leaving MEASURING_VITALS.
+        # The Omron handler retries connect indefinitely until this
+        # event arrives — without it, a citizen who walks away leaves
+        # the kiosk hammering the cuff forever.
+        self._previous_state: str | None = None
 
         # Build screens
         self._idle_screen = IdleScreen()
@@ -349,9 +365,28 @@ class KioskMainWindow(QMainWindow):
 
         self._stack.setCurrentWidget(screen)
         self._captured_types.clear()
+        self._maybe_publish_bp_cancellation(self._previous_state, state)
         self._configure_state_specific(state, snapshot, active_language)
         self._configure_state_timeout(state)
         self._maybe_publish_session_reset(state)
+        self._previous_state = state
+
+    def _maybe_publish_bp_cancellation(
+        self, prev_state: str | None, new_state: str
+    ) -> None:
+        """Publish BpMeasurementRequestCancelled when leaving MEASURING_VITALS.
+
+        The Omron handler retries connect indefinitely; only this
+        event tells it to stop. Fires for every exit path —
+        ABORTED, LANGUAGE_SELECT, ERROR, REPORT (after the BP
+        triple has already been published, in which case the cancel
+        is a harmless no-op since the handler has already returned).
+        """
+        if prev_state != State.MEASURING_VITALS:
+            return
+        if new_state == State.MEASURING_VITALS:
+            return
+        self._publish_async(self._bus.publish(BpMeasurementRequestCancelled()))
 
     def _maybe_publish_session_reset(self, state: str) -> None:
         # Tell session-scoped sensors (e.g., the Xiaomi scale's

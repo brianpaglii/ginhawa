@@ -150,6 +150,18 @@ class BpMeasurementRequested(Event):
     events for systolic / diastolic / pulse, then disconnects."""
 
 
+class BpMeasurementRequestCancelled(Event):
+    """Fired by the GUI when the FSM exits MEASURING_VITALS for any
+    reason (cancel, change-language, error, or REPORT after the BP
+    triple was published). The Omron BP sensor's request handler
+    treats this as the SOLE give-up signal: time-based budgets
+    inside the handler were removed because the user is the natural
+    bound — they can cancel — and the wall-clock window for "citizen
+    fumbling with the cuff" is too unpredictable to encode in a
+    constant. Without this event the handler would loop forever on
+    a session whose user walked away."""
+
+
 class SessionResetForSensors(Event):
     """Signal that a session has ended (or a new one is starting).
 

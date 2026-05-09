@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -532,12 +533,11 @@ async def test_omron_bp_passes_mac_directly_to_bleak_client(
     mock_client.connect.assert_awaited_once()
 
 
-# Verifies the connect-retry budget: when the first connect()
-# attempts fail with BleakError (cuff not yet advertising after the
-# user pressed the BT button), the sensor retries up to
-# _BP_CONNECT_RETRIES times before giving up. We synthesise two
-# failures followed by a success to confirm the loop continues past
-# transient errors and that we don't pre-emptively fail-fast.
+# Verifies the connect retry loop tolerates transient errors: when
+# the first connect() attempts fail with BleakError (cuff not yet
+# advertising after the user pressed the BT button), the sensor
+# keeps retrying past the failures. Three connects: two fail, third
+# succeeds.
 # Mortality: would fail if the retry loop were dropped (one
 # transient flake would surface as a hard error to the GUI).
 @pytest.mark.asyncio
@@ -560,8 +560,10 @@ async def test_omron_bp_retries_connect_on_transient_failure(
         ]
     )
     mocker.patch("bleak.BleakClient", return_value=mock_client)
-    # Speed up the retry sleep so the test stays fast.
-    mocker.patch("asyncio.sleep", new=mocker.AsyncMock())
+    # Speed up the retry sleep so the test stays fast. _sleep_or_cancel
+    # uses asyncio.wait_for under the hood; patching the retry-delay
+    # constant is a more direct lever.
+    mocker.patch("ginhawa_kiosk.sensors.omron_bp._BP_CONNECT_RETRY_DELAY_S", 0.01)
 
     sensor = OmronBpSensor(bus, db_session)
     reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
@@ -570,28 +572,167 @@ async def test_omron_bp_retries_connect_on_transient_failure(
     assert mock_client.connect.await_count == 3
 
 
-# Verifies that exhausting the retry budget surfaces a clear
-# RuntimeError naming "pairing mode" so the GUI can prompt the user
-# to press the BT button on the cuff again.
-# Mortality: would fail if the for/else didn't raise on retry
-# exhaustion, or if the message lost the "pairing mode" hint that
-# the GUI depends on.
+# Verifies the connect loop retries INDEFINITELY rather than giving
+# up after a fixed budget. 20 transient connect failures followed by
+# a success: the handler must not raise, must not abandon, and must
+# return the fresh reading on attempt 21. The earlier 8-attempt
+# budget caused the FSM to hang in MEASURING_VITALS when the citizen
+# was slow with the cuff; the new model lets the user be the bound
+# (they cancel via the GUI).
+# Mortality: would fail if a fixed retry cap were re-introduced.
 @pytest.mark.asyncio
-async def test_omron_bp_raises_when_cuff_not_advertising(
-    bus: EventBus, mocker: Any
+async def test_retry_continues_indefinitely_until_fresh_reading(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
+) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
+    from bleak.exc import BleakError
+
+    payload = _fresh_bp_payload()
+    mock_client = _make_mock_connected_client(mocker, payload)
+    # 20 failures, then a success — well past any plausible historical
+    # retry-budget literal.
+    side_effects: list[BleakError | None] = [
+        BleakError(f"transient #{i}") for i in range(20)
+    ]
+    side_effects.append(None)
+    mock_client.connect = mocker.AsyncMock(side_effect=side_effects)
+    mocker.patch("bleak.BleakClient", return_value=mock_client)
+    mocker.patch("ginhawa_kiosk.sensors.omron_bp._BP_CONNECT_RETRY_DELAY_S", 0.01)
+
+    sensor = OmronBpSensor(bus, db_session)
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+
+    assert reading is not None
+    assert mock_client.connect.await_count == 21
+
+
+# Verifies that when a connect succeeds but the drain phase yields
+# only stale readings until the drain timeout fires, the handler
+# disconnects and reconnects rather than giving up. This is the
+# "citizen pressed BT but is slow to take the actual BP" path:
+# pre-fix, the kiosk gave up after one drain timeout and the FSM
+# hung in MEASURING_VITALS.
+# Mortality: would fail if drain timeout were treated as terminal.
+@pytest.mark.asyncio
+async def test_drain_timeout_triggers_reconnect_not_giveup(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
+) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
+    now = datetime.now()  # naive local — same convention as other tests
+    stale = _build_bp_payload(now - timedelta(hours=5), systolic=140, diastolic=85)
+    fresh = _build_bp_payload(now, systolic=120, diastolic=80, pulse=72)
+
+    # First connect: stale-only payload, drain times out, reconnect.
+    # Second connect: fresh payload arrives, drain returns it.
+    client_a = _make_mock_connected_client(mocker, stale)
+    client_b = _make_mock_connected_client(mocker, fresh)
+    mocker.patch(
+        "bleak.BleakClient",
+        side_effect=[client_a, client_b],
+    )
+    # Compress the drain budget so the test runs fast.
+    mocker.patch("ginhawa_kiosk.sensors.omron_bp._BP_FRESH_READ_TIMEOUT_S", 0.05)
+    mocker.patch("ginhawa_kiosk.sensors.omron_bp._BP_CONNECT_RETRY_DELAY_S", 0.01)
+
+    log = _CapturingLogger()
+    sensor = OmronBpSensor(bus, db_session)
+    sensor._logger = log
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+
+    assert reading is not None
+    assert reading.systolic_mmhg == pytest.approx(120.0)
+    # First client got disconnected before the second attempt fired.
+    client_a.disconnect.assert_called()
+    client_b.disconnect.assert_called()
+    # Drain logged a timeout for the first cycle, then succeeded on
+    # the second.
+    timeouts = [e for e in log.events if e[1] == "omron_bp.fresh_reading_timeout"]
+    assert len(timeouts) == 1
+    received = [e for e in log.events if e[1] == "omron_bp.measurement_received"]
+    assert len(received) == 1
+
+
+# Verifies the cancellation event lets the connect loop exit cleanly
+# without publishing a measurement. Models the FSM exiting
+# MEASURING_VITALS (cancel, change-language, error) while the
+# Omron handler is still cycling through connect retries.
+# Mortality: would fail if the cancel-event check were missing
+# from the connect loop or if the loop ignored the event.
+@pytest.mark.asyncio
+async def test_cancelled_event_exits_loop_cleanly(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
 ) -> None:
     db_session = mocker.MagicMock(name="DbSession")
     from bleak.exc import BleakError
 
     mock_client = mocker.MagicMock(name="BleakClient")
-    mock_client.connect = mocker.AsyncMock(side_effect=BleakError("nope"))
+    mock_client.connect = mocker.AsyncMock(side_effect=BleakError("never works"))
     mock_client.disconnect = mocker.AsyncMock()
     mocker.patch("bleak.BleakClient", return_value=mock_client)
-    mocker.patch("asyncio.sleep", new=mocker.AsyncMock())
+    mocker.patch("ginhawa_kiosk.sensors.omron_bp._BP_CONNECT_RETRY_DELAY_S", 0.01)
 
+    log = _CapturingLogger()
     sensor = OmronBpSensor(bus, db_session)
-    with pytest.raises(RuntimeError, match="pairing mode"):
-        await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+    sensor._logger = log
+
+    # Spawn the loop, let it accumulate a few failures, then cancel.
+    task = asyncio.create_task(
+        sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+    )
+    # Give the loop a chance to fire a couple of attempts.
+    await asyncio.sleep(0.05)
+    sensor._cancel_event.set()
+    # Cancellation should land within a couple of scheduler ticks.
+    reading = await asyncio.wait_for(task, timeout=1.0)
+
+    assert reading is None
+    assert captured_measurements == []
+    cancelled = [e for e in log.events if e[1] == "omron_bp.cancelled_by_fsm_exit"]
+    assert len(cancelled) >= 1
+    # No further attempts should fire after the event — final
+    # connect.await_count is bounded; we don't pin a precise number
+    # because the timing of the cancel within the asyncio scheduler
+    # is non-deterministic, but the count is finite (the test
+    # doesn't hang).
+    assert mock_client.connect.await_count >= 1
+
+
+# Verifies that an outer drain timeout in the test (client_factory)
+# path returns None — preserves the single-shot test surface that
+# existing tests depend on. The production indefinite-retry path is
+# covered by test_drain_timeout_triggers_reconnect_not_giveup above.
+# Mortality: would fail if the client_factory branch were
+# accidentally rewired into the indefinite-retry loop.
+@pytest.mark.asyncio
+async def test_client_factory_path_returns_none_on_drain_timeout(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    mocker: Any,
+) -> None:
+    db_session = mocker.MagicMock(name="DbSession")
+    now = datetime.now()
+    stale = _build_bp_payload(now - timedelta(hours=5), systolic=140, diastolic=85)
+    inner = _make_mock_connected_client(mocker, stale)
+
+    class _Cm:
+        async def __aenter__(self) -> Any:
+            return inner
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    sensor = OmronBpSensor(bus, db_session, client_factory=lambda _mac: _Cm())
+    mocker.patch("ginhawa_kiosk.sensors.omron_bp._BP_FRESH_READ_TIMEOUT_S", 0.05)
+
+    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
+    assert reading is None
+    assert captured_measurements == []
 
 
 # Verifies the real path explicitly disconnects after a successful
@@ -667,43 +808,6 @@ async def test_drains_stored_readings_and_captures_fresh(
     assert len(drained) == 2, f"expected 2 stored_reading_drained logs, got {drained}"
     received = [e for e in log.events if e[1] == "omron_bp.measurement_received"]
     assert len(received) == 1
-
-
-# Verifies the outer timeout fires when the cuff only dumps stale
-# readings and never produces a fresh one. The drain loop should
-# log ``omron_bp.fresh_reading_timeout`` with stale_count >= 1 and
-# return None — no MeasurementProposed published.
-# Mortality: would fail if the timeout were missing (the loop would
-# block forever on queue.get) or if stale_count were dropped from
-# the log line.
-@pytest.mark.asyncio
-async def test_timeout_fires_when_no_fresh_reading(
-    bus: EventBus,
-    captured_measurements: list[MeasurementProposed],
-    mocker: Any,
-) -> None:
-    db_session = mocker.MagicMock(name="DbSession")
-    now = datetime.now()  # naive local — see _build_bp_payload docstring
-    stale_a = _build_bp_payload(now - timedelta(hours=5), systolic=140, diastolic=85)
-    stale_b = _build_bp_payload(now - timedelta(hours=1), systolic=132, diastolic=84)
-    mock_client = _make_mock_connected_client(mocker, stale_a, stale_b)
-    mocker.patch("bleak.BleakClient", return_value=mock_client)
-    # Compress the wall-clock budget so the test runs quickly.
-    mocker.patch("ginhawa_kiosk.sensors.omron_bp._BP_FRESH_READ_TIMEOUT_S", 0.05)
-
-    log = _CapturingLogger()
-    sensor = OmronBpSensor(bus, db_session)
-    sensor._logger = log
-    reading = await sensor._read_notifications_until_fresh("AA:BB:CC:DD:EE:FF")
-
-    assert reading is None
-    assert captured_measurements == []
-    timeouts = [e for e in log.events if e[1] == "omron_bp.fresh_reading_timeout"]
-    assert len(timeouts) == 1
-    level, _event, kwargs = timeouts[0]
-    assert level == "warning"
-    assert kwargs["stale_count"] >= 1
-    assert kwargs["timeout_s"] == pytest.approx(0.05)
 
 
 # Verifies that when the very first notification is fresh, the

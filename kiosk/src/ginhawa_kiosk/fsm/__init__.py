@@ -13,6 +13,7 @@ owns each device's lifecycle.
 
 from .event_bus import (
     Acknowledge,
+    BpMeasurementRequestCancelled,
     BpMeasurementRequested,
     CitizenIdentified,
     ConsentGiven,
@@ -41,6 +42,7 @@ from .session_fsm import (
 
 __all__ = [
     "Acknowledge",
+    "BpMeasurementRequestCancelled",
     "BpMeasurementRequested",
     "CitizenIdentified",
     "ConsentGiven",

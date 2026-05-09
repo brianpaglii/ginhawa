@@ -272,6 +272,51 @@ def test_measuring_vitals_screen_has_no_connect_button(
     assert not hasattr(screen, "connect_to_cuff_requested")
 
 
+# Verifies leaving MEASURING_VITALS publishes
+# BpMeasurementRequestCancelled. The Omron BP handler retries connect
+# indefinitely; this event is the SOLE give-up signal. Without it a
+# citizen who walks away leaves the kiosk hammering the cuff forever.
+# Mortality: would fail if the publish were dropped, gated on a
+# specific exit state, or fired on entry instead of exit.
+@pytest.mark.asyncio
+async def test_state_exit_publishes_bp_cancelled(
+    main_window: KioskMainWindow,
+    fsm: SessionFSM,
+    bus: EventBus,
+    db_session: Session,
+) -> None:
+    from ginhawa_kiosk.fsm import BpMeasurementRequestCancelled
+
+    received: list[BpMeasurementRequestCancelled] = []
+
+    async def listener(event: BpMeasurementRequestCancelled) -> None:
+        received.append(event)
+
+    bus.subscribe(BpMeasurementRequestCancelled, listener)
+
+    fsm.rfid_scanned("CARD_BP_CANCEL")
+    fsm.citizen_identified(_make_citizen(db_session))
+    fsm.language_chosen("en")
+    fsm.path_selected("vitals")
+    assert _current_object_name(main_window) == "measuring_vitals_screen"
+    # Drain anything queued during entry.
+    for _ in range(5):
+        await asyncio.sleep(0)
+    received.clear()
+
+    # Cancel from MEASURING_VITALS → ABORTED. Should fire the cancel
+    # event exactly once.
+    fsm.cancel()
+    assert _current_object_name(main_window) == "aborted_screen"
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert len(received) == 1, (
+        "leaving MEASURING_VITALS must publish exactly one "
+        f"BpMeasurementRequestCancelled; got {len(received)}"
+    )
+
+
 # Verifies entering MEASURING_ANTHRO publishes SessionResetForSensors.
 # Closes the bench race where, between sessions, the Xiaomi scale's
 # ~5 s broadcast cadence let a stale advertisement satisfy the

@@ -56,6 +56,7 @@ from sqlalchemy.orm import Session
 
 from ..db.models import DeviceConfig
 from ..fsm.event_bus import (
+    BpMeasurementRequestCancelled,
     BpMeasurementRequested,
     EventBus,
     MeasurementProposed,
@@ -68,18 +69,22 @@ _BP_MEASUREMENT_CHAR_UUID = "00002a35-0000-1000-8000-00805f9b34fb"
 _CUFF_MAC_CONFIG_KEY = "omron_cuff_mac"
 _SOURCE_DEVICE = "omron_hem7155t"
 
-# Retry budget for the connect() handshake. Total worst-case window:
-# (RETRIES - 1) * DELAY ≈ 70 s of patience for the cuff to start
-# advertising. Sized for the auto-fire flow: the FSM publishes
-# BpMeasurementRequested on entry to MEASURING_VITALS, which lands
-# before the citizen has had a chance to position the cuff and
-# press its BT button. The retry loop has to span "user reads the
-# instructions, places the cuff, takes the BP, presses BT button"
-# — call it ~80 seconds — without giving up. The Xiaomi-vs-Omron
-# adapter collision that previously motivated a shorter window is
-# now serialised by the BleAdapterLock.
-_BP_CONNECT_RETRIES = 8
+# Spacing between connect attempts. The handler retries connect
+# INDEFINITELY: there is no maximum-attempt budget. The user is the
+# natural bound — they can press Cancel on the screen, which exits
+# MEASURING_VITALS and publishes BpMeasurementRequestCancelled.
+# Earlier code capped the loop at 8 × 10 s = 80 s, but field
+# experience showed citizens often take longer to fumble with the
+# cuff (place it, take a reading, press BT) and the FSM hung in
+# MEASURING_VITALS when the budget expired without delivering BP.
+# We keep the 10 s spacing so each attempt fails fast and we cycle
+# to the next without burning CPU on tight retries.
 _BP_CONNECT_RETRY_DELAY_S = 10.0
+
+# Log every Nth retry cycle at info level so journalctl shows the
+# loop is alive without spamming one line per attempt. With a 10 s
+# spacing, every 5 cycles is roughly one progress line per minute.
+_BP_LOG_PROGRESS_EVERY_N = 5
 
 # Freshness window for stored measurements. The HEM-7155T's
 # store-and-forward BLE model means a citizen who taps "Connect to
@@ -94,15 +99,15 @@ _BP_CONNECT_RETRY_DELAY_S = 10.0
 # fresh measurement and tap Connect again.
 _BP_FRESHNESS_WINDOW_S = 180.0  # 3 minutes
 
-# Outer wall-clock budget for the drain-and-wait phase, measured
-# from the moment notifications start flowing. The cuff dumps any
-# stored readings within a few seconds of the indicate subscription
-# (store-and-forward), so this only needs to span "drain stale
-# readings + give the user a beat to press START on the cuff again
-# if the kiosk's prompt is what reminded them". 90 s comfortably
-# covers both phases without leaving the citizen staring at a
-# spinner forever when the cuff has nothing fresh to deliver.
-_BP_FRESH_READ_TIMEOUT_S = 90.0
+# Outer wall-clock budget for ONE drain phase, measured from the
+# moment notifications start flowing. The cuff dumps stored readings
+# within a few seconds of the indicate subscription, so this only
+# needs to span "drain stale readings + give the user a beat to
+# press START on the cuff again". 180 s gives a slow citizen room
+# to take the BP after pairing without timing out. When this drain
+# elapses without a fresh reading, the handler disconnects and
+# loops back to the connect retry — it does NOT give up.
+_BP_FRESH_READ_TIMEOUT_S = 180.0
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +408,13 @@ class OmronBpSensor(Sensor):
         # every retry). With the lock acquired, the Xiaomi side
         # stops, the BP path runs, then the Xiaomi side resumes.
         self._ble_lock = ble_lock
+        # Per-request cancellation. Set when the GUI publishes
+        # BpMeasurementRequestCancelled (FSM exited MEASURING_VITALS).
+        # Both the connect retry loop and the drain loop check the
+        # event and bail cleanly. Reset at the start of every
+        # _handle_request so a previously-cancelled session doesn't
+        # poison the next one.
+        self._cancel_event = asyncio.Event()
 
     async def start(self) -> None:  # pragma: no cover - hardware path
         if self._running:
@@ -414,7 +426,22 @@ class OmronBpSensor(Sensor):
                 "the kiosk cannot operate the BP cuff without it"
             )
         self._bus.subscribe(BpMeasurementRequested, self._handle_request)
+        self._bus.subscribe(
+            BpMeasurementRequestCancelled, self._on_cancellation_requested
+        )
         self._running = True
+
+    async def _on_cancellation_requested(
+        self, _event: BpMeasurementRequestCancelled
+    ) -> None:
+        """Bus handler: signal the in-flight request to give up.
+
+        Idempotent — firing on a state that wasn't waiting for BP
+        (the FSM may exit MEASURING_VITALS via REPORT after a
+        successful publish, in which case the handler has already
+        returned) just sets the event with no observer.
+        """
+        self._cancel_event.set()
 
     async def stop(self) -> None:  # pragma: no cover - hardware path
         # The bus has no unsubscribe today; simply mark as not-running so
@@ -450,6 +477,12 @@ class OmronBpSensor(Sensor):
             )
             return
         async with self._request_lock:
+            # Reset the cancellation flag at the START of every
+            # request — a previous session that ended with cancel
+            # set the event; without resetting here the next session
+            # would bail immediately. Tests that flip the flag
+            # explicitly after this point continue to work.
+            self._cancel_event.clear()
             self._logger.info("omron_bp.request_started", mac=self._mac)
             # Acquire the BLE adapter exclusively for the duration of
             # the directed connect. The Xiaomi scale's continuous
@@ -469,12 +502,14 @@ class OmronBpSensor(Sensor):
                 )
                 return
             if reading is None:
-                # Outer drain timeout already logged with stale_count.
+                # Either cancelled (logged as cancelled_by_fsm_exit)
+                # or test-path single-shot drain timeout — either
+                # way the handler returns without publishing.
                 return
             await self._publish_reading(reading)
 
     async def _read_notifications_until_fresh(self, mac: str) -> BpReading | None:
-        """Connect, subscribe, drain stored readings until a fresh one arrives.
+        """Connect, subscribe, drain — retry indefinitely until fresh or cancel.
 
         The HEM-7155T uses a store-and-forward BLE model: on connect
         it dumps every measurement it has buffered (typically just
@@ -495,29 +530,30 @@ class OmronBpSensor(Sensor):
           logged as ``omron_bp.stored_reading_drained`` and skipped.
         * The first reading inside the freshness window is logged
           as ``omron_bp.measurement_received`` and returned.
-        * The whole drain phase is bounded by
-          ``_BP_FRESH_READ_TIMEOUT_S``; on timeout we log
-          ``omron_bp.fresh_reading_timeout`` (with how many stale
-          readings were drained) and return ``None``.
+        * One drain phase is bounded by ``_BP_FRESH_READ_TIMEOUT_S``;
+          on timeout the handler disconnects and reconnects rather
+          than giving up. The ONLY give-up path is the cancellation
+          event from the GUI when the FSM exits MEASURING_VITALS.
 
         Two construction paths for the underlying client:
 
-        * Test path (``self._client_factory`` is set): the factory
-          returns an async context manager; we use ``async with`` to
-          enter and leave it. Mocked factories produce real context
-          managers in unit tests.
+        * Test path (``self._client_factory`` is set): single-shot —
+          one connect, one drain, return whatever the drain yields
+          (None on drain-timeout, BpReading on success). Tests that
+          want to exercise reconnect-after-drain-timeout supply a
+          factory that produces a sequence of clients.
 
         * Real path: ``bleak.BleakClient(mac).connect()`` directly,
           mirroring userx14/omblepy. BlueZ has the cuff cached from
           commissioning, so direct connect is fast (1–3 s typical).
-          We retry ``_BP_CONNECT_RETRIES`` times with
-          ``_BP_CONNECT_RETRY_DELAY_S`` seconds between attempts to
-          absorb the transient "not advertising yet" window between
-          the user pressing the BT button and the cuff actually
-          starting to broadcast. After the final retry exhausts, we
-          surface a clear error pointing at pairing mode.
-          ``client.disconnect()`` is in a ``finally`` block so we
-          always release the BLE handle even on drain timeout.
+          The outer loop retries connect indefinitely with
+          ``_BP_CONNECT_RETRY_DELAY_S`` seconds between attempts;
+          after a successful connect, the drain runs; if drain
+          times out, we disconnect and loop back to connect. The
+          loop only exits when (a) a fresh reading is captured, or
+          (b) ``self._cancel_event`` fires (FSM exited
+          MEASURING_VITALS). ``client.disconnect()`` is in a
+          ``finally`` block so the BLE handle is always released.
         """
         queue: asyncio.Queue[bytes] = asyncio.Queue()
 
@@ -525,6 +561,8 @@ class OmronBpSensor(Sensor):
             queue.put_nowait(bytes(data))
 
         if self._client_factory is not None:
+            # Single-shot for tests. Production path is the real
+            # bleak loop below.
             client_cm = self._client_factory(mac)
             async with client_cm as client:
                 await client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
@@ -536,80 +574,114 @@ class OmronBpSensor(Sensor):
         from bleak import BleakClient
         from bleak.exc import BleakError
 
-        # Fresh ``BleakClient`` per attempt. Reusing one instance across
-        # retries (the previous design) carried over BlueZ state — once
-        # the first ``connect()`` saw ``[org.bluez.Error.InProgress]``,
-        # every subsequent attempt on the same client object hit the
-        # same error because the underlying D-Bus method call was still
-        # logically pending. A fresh client + best-effort disconnect on
-        # failure lets BlueZ cleanly release the operation between
-        # tries.
-        connected_client: Any | None = None
-        last_error: Exception | None = None
-        for attempt in range(_BP_CONNECT_RETRIES):
-            candidate = BleakClient(mac)
-            try:
-                await candidate.connect()
-                connected_client = candidate
-                break
-            except (BleakError, asyncio.TimeoutError) as exc:
-                last_error = exc
-                self._logger.warning(
-                    "omron_bp.connect_attempt_failed",
-                    mac=mac,
-                    attempt=attempt + 1,
-                    of=_BP_CONNECT_RETRIES,
-                    error=str(exc),
-                )
-                # Best-effort: tell BlueZ to release whatever it had
-                # pending on this candidate. Errors on disconnect are
-                # expected (the client never actually connected) so
-                # they are silently absorbed.
+        # Indefinite outer loop: connect → drain → on drain-timeout
+        # reconnect; on cancel exit cleanly. The user is the natural
+        # bound — they cancel via the GUI when they give up.
+        attempt = 0
+        while not self._cancel_event.is_set():
+            # Inner connect retry: try to connect, sleep on failure,
+            # cycle to next attempt. A surfaced progress log every N
+            # attempts keeps journalctl readable.
+            connected_client: Any | None = None
+            while not self._cancel_event.is_set() and connected_client is None:
+                attempt += 1
+                if attempt > 1 and (attempt - 1) % _BP_LOG_PROGRESS_EVERY_N == 0:
+                    self._logger.info(
+                        "omron_bp.retry_cycle_starting",
+                        mac=mac,
+                        attempt=attempt,
+                    )
+                # Fresh ``BleakClient`` per attempt. Reusing one
+                # across retries carried over BlueZ state — once
+                # ``connect()`` saw [InProgress], every subsequent
+                # attempt on the same object hit the same error
+                # because the underlying D-Bus method call was still
+                # logically pending. A fresh client + best-effort
+                # disconnect on failure lets BlueZ release between
+                # tries.
+                candidate = BleakClient(mac)
                 try:
-                    await candidate.disconnect()
+                    await candidate.connect()
+                    connected_client = candidate
+                    break
+                except (BleakError, asyncio.TimeoutError) as exc:
+                    self._logger.warning(
+                        "omron_bp.connect_attempt_failed",
+                        mac=mac,
+                        attempt=attempt,
+                        error=str(exc),
+                    )
+                    try:
+                        await candidate.disconnect()
+                    except Exception:
+                        pass
+                    await self._sleep_or_cancel(_BP_CONNECT_RETRY_DELAY_S)
+
+            if self._cancel_event.is_set():
+                if connected_client is not None:
+                    try:
+                        await connected_client.disconnect()
+                    except Exception:
+                        pass
+                self._logger.info("omron_bp.cancelled_by_fsm_exit", mac=mac)
+                return None
+
+            assert connected_client is not None  # cancel guard above
+            try:
+                await connected_client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
+                reading = await self._drain_until_fresh(queue, mac)
+            finally:
+                try:
+                    await connected_client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
                 except Exception:
                     pass
-                if attempt < _BP_CONNECT_RETRIES - 1:
-                    await asyncio.sleep(_BP_CONNECT_RETRY_DELAY_S)
+                try:
+                    await connected_client.disconnect()
+                except Exception:
+                    pass
 
-        if connected_client is None:
-            # Distinct log event from the per-attempt
-            # omron_bp.connect_attempt_failed: this one fires once
-            # when the budget is fully spent so journalctl filters
-            # ("hung BP cuff for >80s") work cleanly without
-            # double-counting per-attempt warnings.
-            self._logger.warning(
-                "omron_bp.retries_exhausted",
-                mac=mac,
-                attempts=_BP_CONNECT_RETRIES,
-                window_s=_BP_CONNECT_RETRIES * _BP_CONNECT_RETRY_DELAY_S,
-                last_error=str(last_error) if last_error else None,
-            )
-            raise RuntimeError(
-                f"Omron HEM-7155T at {mac} did not connect after "
-                f"{_BP_CONNECT_RETRIES} attempts — put the cuff into "
-                f"pairing mode and try again (last error: {last_error})"
-            )
+            if reading is not None:
+                return reading
+            if self._cancel_event.is_set():
+                self._logger.info("omron_bp.cancelled_by_fsm_exit", mac=mac)
+                return None
+            # Drain elapsed without a fresh reading and the user
+            # hasn't cancelled — go round again. The fresh_reading_
+            # timeout log already fired inside _drain_until_fresh
+            # with the stale_count for this cycle.
 
+        self._logger.info("omron_bp.cancelled_by_fsm_exit", mac=mac)
+        return None
+
+    async def _sleep_or_cancel(self, seconds: float) -> None:
+        """Sleep for ``seconds``, returning early if cancelled.
+
+        Wraps ``asyncio.wait_for`` on the cancel event so we don't
+        burn the full retry-delay window after the user has already
+        cancelled. Catches the timeout (the normal "slept the whole
+        delay" outcome) so callers don't have to.
+        """
         try:
-            await connected_client.start_notify(_BP_MEASUREMENT_CHAR_UUID, callback)
-            return await self._drain_until_fresh(queue, mac)
-        finally:
-            try:
-                await connected_client.stop_notify(_BP_MEASUREMENT_CHAR_UUID)
-            except Exception:
-                pass
-            await connected_client.disconnect()
+            await asyncio.wait_for(self._cancel_event.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
 
     async def _drain_until_fresh(
         self, queue: asyncio.Queue[bytes], mac: str
     ) -> BpReading | None:
-        """Consume notifications until a fresh reading or the outer timeout.
+        """Consume notifications until a fresh reading, timeout, or cancel.
 
         Held inside the BLE-adapter lock for the full drain
         duration (the caller establishes the lock); the queue is
         fed by the notify callback. Returns the first fresh
-        :class:`BpReading` or ``None`` on timeout.
+        :class:`BpReading`, or ``None`` on either drain timeout or
+        cancellation. Callers distinguish the two via
+        ``self._cancel_event.is_set()``.
+
+        Cancellation has a sub-second upper bound: each ``queue.get``
+        is raced against ``self._cancel_event.wait()`` so a cancel
+        fired during a quiet drain doesn't have to wait the full
+        180 s timeout.
         """
         loop = asyncio.get_event_loop()
         deadline = loop.time() + _BP_FRESH_READ_TIMEOUT_S
@@ -625,9 +697,27 @@ class OmronBpSensor(Sensor):
                     timeout_s=_BP_FRESH_READ_TIMEOUT_S,
                 )
                 return None
+            if self._cancel_event.is_set():
+                return None
+            # Race the queue against the cancel event so a cancel
+            # mid-drain wakes us within the asyncio scheduler tick
+            # rather than waiting up to ``remaining`` seconds.
+            get_task = asyncio.create_task(queue.get())
+            cancel_task = asyncio.create_task(self._cancel_event.wait())
             try:
-                payload = await asyncio.wait_for(queue.get(), timeout=remaining)
-            except asyncio.TimeoutError:
+                done, _pending = await asyncio.wait(
+                    {get_task, cancel_task},
+                    timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                if not get_task.done():
+                    get_task.cancel()
+                if not cancel_task.done():
+                    cancel_task.cancel()
+            if cancel_task in done:
+                return None
+            if get_task not in done:
                 self._logger.warning(
                     "omron_bp.fresh_reading_timeout",
                     mac=mac,
@@ -635,6 +725,7 @@ class OmronBpSensor(Sensor):
                     timeout_s=_BP_FRESH_READ_TIMEOUT_S,
                 )
                 return None
+            payload = get_task.result()
             try:
                 reading = parse_bp_measurement(payload)
             except ValueError as exc:
