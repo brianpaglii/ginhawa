@@ -29,6 +29,14 @@ dist/
 *.pem
 *.key
 
+# Bench-only MQTT credential file used by
+# scripts/bench_mqtt_publish.sh; the *.example template is committed.
+scripts/.bench_mqtt_secrets
+
+# Firmware secrets (Wi-Fi PSK + Mosquitto password baked into each
+# ESP32 image) — secrets.h.example is committed; secrets.h is not.
+firmware/*/include/secrets.h
+
 # Local databases
 *.db
 *.sqlite

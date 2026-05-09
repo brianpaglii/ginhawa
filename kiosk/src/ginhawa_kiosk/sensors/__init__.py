@@ -88,6 +88,8 @@ def create_mqtt_sensors(bus: EventBus, settings: Settings, db: Session) -> Senso
         db,
         broker_host=settings.MQTT_BROKER_HOST,
         broker_port=settings.MQTT_BROKER_PORT,
+        username=settings.MQTT_USERNAME,
+        password=settings.MQTT_PASSWORD,
     )
 
 

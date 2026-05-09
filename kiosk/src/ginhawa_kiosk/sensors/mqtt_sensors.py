@@ -4,7 +4,10 @@ Topic taxonomy (subscribed with QoS 1):
 
 * ``ginhawa/kiosk/<device_id>/sensors/spo2``         — ESP32-A
 * ``ginhawa/kiosk/<device_id>/sensors/heart_rate``   — ESP32-A
-* ``ginhawa/kiosk/<device_id>/sensors/temperature``  — ESP32-B
+* ``ginhawa/kiosk/<device_id>/sensors/temperature``  — ESP32-A
+  (per ADR-0018; MLX90640BAB physically located near MAX30100 on
+  the console node so the imager has the right viewing geometry to
+  the citizen's forehead)
 * ``ginhawa/kiosk/<device_id>/sensors/height``       — ESP32-B
 
 Each topic carries a JSON payload ``{value: float, unit: str,
@@ -46,7 +49,7 @@ _DEVICE_ID_CONFIG_KEY = "kiosk_device_id"
 _TOPIC_ROUTES: dict[str, tuple[str, str, str]] = {
     "spo2": ("spo2", "%", "esp32_a_max30100"),
     "heart_rate": ("heart_rate", "bpm", "esp32_a_max30100"),
-    "temperature": ("temperature", "C", "esp32_b_mlx90640"),
+    "temperature": ("temperature", "C", "esp32_a_mlx90640"),
     "height": ("height", "cm", "esp32_b_vl53l0x"),
 }
 
@@ -109,12 +112,16 @@ class MqttSensorSubscriber(Sensor):
         *,
         broker_host: str = "localhost",
         broker_port: int = 1883,
+        username: str = "",
+        password: str = "",
         client_factory: Any | None = None,
     ) -> None:
         self._bus = bus
         self._db = db
         self._broker_host = broker_host
         self._broker_port = broker_port
+        self._username = username
+        self._password = password
         self._client_factory = client_factory
         self._logger = structlog.get_logger("sensor.mqtt")
         self._client: Any | None = None
@@ -137,6 +144,13 @@ class MqttSensorSubscriber(Sensor):
         # handling internals directly.
         self._loop = asyncio.get_running_loop()  # pragma: no cover
         self._client = self._build_client()  # pragma: no cover
+        # Mosquitto on the LAN-bound deployment refuses anonymous
+        # connects; supply credentials before connect() if the
+        # operator configured them. Set both or neither — paho takes
+        # username with optional password, but our broker requires
+        # both, so we treat an empty username as "no auth at all".
+        if self._username:  # pragma: no cover - real-network path
+            self._client.username_pw_set(self._username, self._password)
         self._client.on_connect = self._on_connect  # pragma: no cover
         self._client.on_message = self._on_message  # pragma: no cover
         self._client.reconnect_delay_set(  # pragma: no cover

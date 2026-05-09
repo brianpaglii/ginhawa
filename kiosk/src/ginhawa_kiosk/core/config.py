@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     # --- Local broker ----------------------------------------------------
     MQTT_BROKER_HOST: str = "localhost"
     MQTT_BROKER_PORT: int = 1883
+    # Mosquitto auth — empty defaults so MOCK_HARDWARE / dev paths don't
+    # need to set them. In production the broker rejects anonymous
+    # publishers (allow_anonymous false) so both fields MUST be set in
+    # the kiosk's environment file. The subscriber treats either field
+    # being empty as "no auth"; the broker will then refuse the
+    # connection, which is the right loud-failure behaviour.
+    MQTT_USERNAME: str = ""
+    MQTT_PASSWORD: str = ""
 
     # --- Thermal printer (ESC/POS over USB; portable across vendors) -----
     # VID/PID. Default is the Xprinter XP-58IIH (0x0416 / 0x5011); override
