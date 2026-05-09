@@ -99,21 +99,15 @@ _BP_LOG_PROGRESS_EVERY_N = 5
 # fresh measurement and tap Connect again.
 _BP_FRESHNESS_WINDOW_S = 180.0  # 3 minutes
 
-# Outer wall-clock budget for ONE drain phase, measured from the
-# moment notifications start flowing. The cuff dumps any stored
-# readings within ~5 s of the indicate subscription; after that the
-# cuff is silent until the user presses START. Shorter timeouts
-# mean faster reconnect cycles and less perceived delay while the
-# user is mid-fumble; longer timeouts mean fewer reconnects and
-# lower BLE adapter contention with the Xiaomi scanner. 30 s is
-# the pragmatic middle: long enough that an in-progress measurement
-# can finish and emit, short enough that the user doesn't think the
-# kiosk has frozen. The earlier 180 s value matched the freshness
-# window by coincidence and dominated the bench-measured "card tap
-# to fresh capture" cycle; reducing it to 30 s shaves ~150 s off
-# the worst case without making the request handler give up — the
-# outer connect loop reconnects and drains again on every drain
-# timeout, indefinitely until cancellation.
+# After connect, the cuff dumps stored readings rapid-fire (typically
+# in 1-2 seconds), then goes silent until the user presses START. We
+# wait this long for that fresh notification before giving up the
+# current connect+drain cycle and reconnecting. Reconnect re-drains
+# any reading that arrived during the previous cycle's silence.
+#
+# 30 seconds is a balance: long enough that an in-progress BP
+# measurement (typical Omron cycle ~25s) can finish and emit, short
+# enough that the user doesn't see the kiosk as frozen.
 #
 # Independent of _BP_FRESHNESS_WINDOW_S above: that's the
 # "fresh-vs-stale" boundary on a reading's payload timestamp; this
