@@ -106,6 +106,14 @@ void setup() {
 }
 
 void loop() {
+#ifdef DIAGNOSTIC_MAX30100
+    static unsigned long last_dump = 0;
+    if (millis() - last_dump > 500) {
+        last_dump = millis();
+        sensor_max30100_diagnostic_dump(Wire);
+    }
+#endif
+
     unsigned long now = millis();
 
     // MAX30100 — drive the library's beat detector at ~100 Hz.

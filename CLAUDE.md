@@ -20,12 +20,81 @@ not diagnoses.
 This is a monorepo with four top-level packages plus shared support
 directories. The packages have intentionally separate dependency trees
 because they target different runtimes (microcontroller, Linux SBC,
-cloud Linux, browser).
+cloud Linux, browser).Build the kiosk's sensor abstractions: RFID reader, Xiaomi BLE scale, Omron BLE blood-pressure cuff, and MQTT subscriber for ESP32 sensors. Each sensor has a mock implementation (for development on a laptop without hardware) and a real implementation (for the Pi with hardware connected). The MOCK_HARDWARE setting from Prompt 1 selects between them at startup.
+Prerequisites — verify before starting:
+
+Phase 2 Prompts 1-5 committed. The integration test passes.
+xiaomi-ble>=1.3.0, bleak, home-assistant-bluetooth, paho-mqtt, and evdev are in pyproject.toml. Add them via uv add if missing.
+ADR-0017 (BLE library choice for Xiaomi S200) is written and Accepted.
+The Xiaomi scale bindkey extraction process is documented in the kiosk's commissioning runbook.
+
+If any prerequisite is unmet, stop and report.
+Abstract base class in kiosk/src/ginhawa_kiosk/sensors/base.py:
+Define a Sensor abstract base class with:
+
+async def start(self) -> None — begin listening for events from the underlying device
+async def stop(self) -> None — clean shutdown
+is_running: bool property
+The sensor publishes events to the event bus when relevant inputs arrive; it does not return values to its caller. The bus is the integration point.
+
+Sensors are constructed with the event bus as a dependency. They never write directly to the database; that's the persistence layer's responsibility.
+RFID reader in kiosk/src/ginhawa_kiosk/sensors/rfid.py:
+RFID reader is a USB HID device (typical 125kHz proximity reader, e.g., the kind that costs ~$20 and presents as a keyboard). When a card is tapped, the reader emits the card's UID followed by Enter, as if it were typed.
+Mock implementation MockRfidReader: exposes a simulate_tap(uid: str) method that publishes an RfidScanned(uid=uid) event to the bus. This is what the integration test uses.
+Real implementation EvdevRfidReader: uses evdev to read from the configured input device path (e.g., /dev/input/event0, configured via env var KIOSK_RFID_DEVICE_PATH). Buffers keystrokes until Enter is received, then publishes RfidScanned(uid=buffered_string). Handles device disconnect by attempting reconnect every 5 seconds with structured-log warnings.
+Selection: in sensors/__init__.py, a factory function create_rfid_reader(bus, settings) returns MockRfidReader if settings.mock_hardware else EvdevRfidReader.
+Xiaomi BLE scale in sensors/xiaomi_scale.py:
+Wraps xiaomi-ble per the spike. Listens to BLE advertisements, decrypts using bindkey from device_config (key xiaomi_scale_bindkey), publishes MeasurementProposed(measurement_type='weight', value=kg, unit='kg', source_device='xiaomi_s200_ble', claimed_is_valid=True) events when weight readings come through.
+Critical implementation details:
+
+Wrap Bleak's AdvertisementData into BluetoothServiceInfoBleak before passing to XiaomiBluetoothDeviceData.update() — the library expects this wrapping per the spike findings.
+Filter for events where mass appears in entity_values; ignore signal_strength-only advertisements.
+Deduplicate: track the last published (value, timestamp) and only publish a new event when the value differs by ≥0.1 kg or 5 seconds have elapsed since the last publish. The Xiaomi scale rebroadcasts the same measurement multiple times for reception reliability; we want one event per actual measurement.
+Ignore the profile_id entirely. Document why in a comment: in a kiosk context the profile_id is meaningless because dozens of unrelated citizens use the same physical scale; citizen identity comes from the RFID tap, not from the scale.
+
+Mock implementation MockXiaomiScale: exposes simulate_weight(kg: float) for tests.
+Real implementation XiaomiScaleSensor: the wrapping described above. Loads bindkey from device_config at start(). Raises a clear error if bindkey is missing — the kiosk cannot be commissioned without one.
+Omron BLE blood-pressure cuff in sensors/omron_bp.py:
+The Omron HEM-7155T uses a different protocol than Xiaomi — it implements the standard Bluetooth SIG Blood Pressure Service (UUID 0x1810), so unlike Xiaomi we don't need a vendor-specific library. We use bleak directly.
+The protocol: connect to the cuff, subscribe to notifications on the Blood Pressure Measurement characteristic (0x2A35), receive a single notification per measurement containing systolic, diastolic, MAP, pulse, and timestamp. Disconnect after the measurement.
+Mock implementation MockOmronBp: exposes simulate_measurement(systolic, diastolic, pulse) for tests.
+Real implementation OmronBpSensor: uses bleak. The kiosk pre-pairs with the cuff at commissioning (the cuff's MAC address is stored in device_config under omron_cuff_mac). On start(), the sensor begins a connection-and-listen loop: connect when measurement is requested by the FSM (subscribing to a BpMeasurementRequested event), wait for one notification, parse it per the SIG specification, publish MeasurementProposed events for both systolic and diastolic and pulse, then disconnect.
+Parse the BP measurement characteristic per the Bluetooth SIG specification — flags byte first, then 6 bytes of measurement (systolic, diastolic, MAP as IEEE 11073 SFLOAT-16), optional fields based on flags. The library bleak-retry-connector may help with reliability.
+Add bleak-retry-connector to dependencies if you use it.
+MQTT subscriber for ESP32 sensors in sensors/mqtt_sensors.py:
+The two ESP32s publish sensor readings to MQTT topics on the local broker. Topic taxonomy:
+
+ginhawa/kiosk/<device_id>/sensors/spo2 — published by ESP32-A
+ginhawa/kiosk/<device_id>/sensors/heart_rate — published by ESP32-A
+ginhawa/kiosk/<device_id>/sensors/temperature — published by ESP32-A
+ginhawa/kiosk/<device_id>/sensors/height — published by ESP32-B
+
+Each topic carries a JSON payload: {value: float, unit: str, captured_at: ISO8601}. The kiosk's device_id is loaded from device_config.
+Mock implementation MockMqttSensors: exposes simulate_publish(topic_suffix, value, unit) for tests.
+Real implementation MqttSensorSubscriber: uses paho-mqtt async API. On start(), connects to the broker (host/port from settings), subscribes to all four topics with QoS 1, publishes a MeasurementProposed event for each received message. Handles broker disconnect with reconnect-and-resubscribe automatically (paho-mqtt's auto-reconnect plus a callback that re-subscribes on on_connect).
+Validation: if a topic-suffix doesn't match the four expected, log a warning and drop the message. If the JSON is malformed, log and drop. The kiosk should never crash on a malformed MQTT payload.
+Wiring in kiosk/src/ginhawa_kiosk/sensors/__init__.py:
+Factory function create_all_sensors(bus, settings, db) -> dict[str, Sensor] that instantiates the four sensor types using mock/real selection based on settings.mock_hardware. Returns a dict keyed by sensor name for the application's lifecycle manager to start/stop in coordinated fashion.
+Tests:
+Each sensor's mock and real implementations get tests in kiosk/tests/sensors/. The mock tests verify the simulated event publishing; the real tests use pytest-bleak (or similar) and paho-mqtt-mocking to verify the wrapping logic without actual hardware.
+Specifically:
+
+test_mock_rfid_reader_publishes_event_on_simulate_tap — mortality: 'Would fail if MockRfidReader did not call bus.publish.'
+test_evdev_rfid_reader_buffers_until_enter — feed simulated keystrokes via mock evdev; assert one event per Enter. Mortality: 'Would fail if the buffer were emitted on every keystroke or never flushed.'
+test_xiaomi_scale_deduplicates_repeated_readings — feed the same advertisement three times in 1 second; assert one event published. Then feed the same advertisement after 6 seconds; assert a second event. Mortality: 'Would fail if deduplication logic were removed or threshold changed.'
+test_xiaomi_scale_ignores_signal_strength_only_advertisements — feed an advertisement with only signal_strength in entity_values; assert no event. Mortality: 'Would fail if the mass-presence check were removed.'
+test_xiaomi_scale_raises_on_missing_bindkey — initialize without bindkey in device_config; assert clear error. Mortality: 'Would fail if the kiosk silently accepted a missing bindkey.'
+test_omron_bp_parses_sig_blood_pressure_measurement — feed a hardcoded SIG BP measurement payload; assert systolic/diastolic/pulse extracted correctly. Mortality: 'Would fail if the SFLOAT-16 parsing were broken.'
+test_mqtt_subscriber_publishes_event_for_each_topic — simulate four MQTT messages; assert four events. Mortality: 'Would fail if topic-to-measurement-type routing were broken.'
+test_mqtt_subscriber_drops_malformed_payloads — feed invalid JSON; assert no event, warning logged, no crash. Mortality: 'Would fail if a malformed payload crashed the subscriber.'
+
+Each test self-contained, no shared fixtures except the standard event bus and database fixtures.
+Run pytest. Coverage on sensors/ ≥ 90%. Commit message after review: feat(kiosk): sensor abstractions for RFID, Xiaomi BLE scale, Omron BLE BP cuff, and MQTT subscribers.
 
 - `firmware/esp32-a-vitals/` — ESP32 firmware for the console node
-  (MAX30100 pulse oximeter)
+  (MAX30100 pulse oximeter + MLX90640BAB thermal imager)
 - `firmware/esp32-b-anthro/` — ESP32 firmware for the stand node
-  (VL53L0X height sensor + MLX90640BAB thermal imager)
+  (VL53L0X height sensor)
 - `kiosk/` — Raspberry Pi 5 Python application (PyQt6 GUI, session FSM,
   BLE services, MQTT broker client, SQLite, sync daemon, printer)
 - `cloud/` — FastAPI + PostgreSQL backend (REST API, BHW portal data,
@@ -50,11 +119,12 @@ explicitly open the topic.
   stack and must not be used.
 - **Sensor nodes:** Two ESP32 microcontrollers. ESP32-A on the console
   with the MAX30100 pulse oximeter (via M5Stack Mini Heart Rate Unit,
-  with a physical finger shroud). ESP32-B on the stand with the VL53L0X
-  Time-of-Flight height sensor (long-range mode, validated range
-  120–185 cm) and the MLX90640BAB thermal imager (wide-angle 110°×75°,
-  centre-ROI peak detection at 25–30 cm working distance, emissivity
-  0.98).
+  with a physical finger shroud) and the MLX90640BAB thermal imager
+  (wide-angle 110°×75°, centre-ROI peak detection at 25–30 cm working
+  distance, emissivity 0.98). The two sensors live on separate I²C
+  buses (Wire / Wire1) to preserve the bandwidth isolation per
+  ADR-0018. ESP32-B on the stand with the VL53L0X Time-of-Flight
+  height sensor (long-range mode, validated range 120–185 cm).
 - **BLE commercial devices, attached directly to the Pi (NOT through
   ESP32):**
   - Omron HEM-7155T blood pressure monitor — clinically validated,

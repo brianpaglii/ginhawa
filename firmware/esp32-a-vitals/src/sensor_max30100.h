@@ -40,3 +40,11 @@ void sensor_max30100_tick();
 // has_value=false for a channel that didn't accumulate the minimum
 // number of stable samples.
 VitalsReading sensor_max30100_consume_stable();
+
+// Diagnostic: read the chip's PART_ID register and a raw IR/red
+// FIFO sample directly off the bus, then print everything plus the
+// library's current SpO2 / HR estimate and rolling-buffer counts.
+// Intended to be called every ~500 ms from main.cpp's loop() under
+// `#ifdef DIAGNOSTIC_MAX30100` (built via [env:esp32dev_diag]).
+// Linker dead-code elimination drops it from production builds.
+void sensor_max30100_diagnostic_dump(TwoWire& bus);
