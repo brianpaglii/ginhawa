@@ -583,11 +583,12 @@ QDateEdit#register_dob_input::drop-down {{
 /* QCalendarWidget popup — sized for finger taps on a 1920x1080 panel
    instead of Qt's default mouse-friendly cells. The min-width /
    min-height push the popup well past the cramped default so each
-   day cell ends up >= ~64x48 px. */
+   day cell ends up >= ~64x48 px AND the navigation bar has room for
+   the enlarged year-picker spinbox (see QSpinBox block below). */
 QCalendarWidget {{
     background-color: {background};
-    min-width: 560px;
-    min-height: 480px;
+    min-width: 640px;
+    min-height: 560px;
 }}
 
 QCalendarWidget QToolButton {{
@@ -611,11 +612,60 @@ QCalendarWidget QMenu {{
     font-size: {body_size}px;
 }}
 
+/* Year-picker spinbox in the navigation bar. Qt's default
+   up/down indicator arrows render as ~12 px glyphs that disappear
+   inside our enlarged calendar — citizens (often elderly) cannot
+   tap them. Build the buttons as primary-teal subcontrols with
+   explicit 48x32 px tap targets so the year is changeable by touch.
+   The arrow glyph is sized via ::up-arrow / ::down-arrow so Qt
+   doesn't draw it microscopically. */
 QCalendarWidget QSpinBox {{
     font-size: {body_size}px;
     color: {text_primary};
-    min-height: 48px;
-    padding: 4px 8px;
+    background-color: {background};
+    border: 2px solid {primary};
+    border-radius: 6px;
+    min-height: 64px;
+    min-width: 140px;
+    padding: 0 8px;
+    selection-background-color: {primary};
+    selection-color: {text_on_primary};
+}}
+
+QCalendarWidget QSpinBox::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 48px;
+    height: 32px;
+    border-left: 1px solid {border};
+    border-top-right-radius: 4px;
+    background-color: {primary};
+}}
+
+QCalendarWidget QSpinBox::up-button:hover,
+QCalendarWidget QSpinBox::up-button:pressed {{
+    background-color: {primary_dark};
+}}
+
+QCalendarWidget QSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 48px;
+    height: 32px;
+    border-left: 1px solid {border};
+    border-bottom-right-radius: 4px;
+    background-color: {primary};
+}}
+
+QCalendarWidget QSpinBox::down-button:hover,
+QCalendarWidget QSpinBox::down-button:pressed {{
+    background-color: {primary_dark};
+}}
+
+QCalendarWidget QSpinBox::up-arrow,
+QCalendarWidget QSpinBox::down-arrow {{
+    width: 20px;
+    height: 20px;
 }}
 
 QCalendarWidget QAbstractItemView {{
