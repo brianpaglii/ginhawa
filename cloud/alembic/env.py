@@ -1,10 +1,10 @@
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
+from ginhawa_cloud.core.config import get_settings
 from ginhawa_cloud.db import models  # noqa: F401  ensures tables are registered
 from ginhawa_cloud.db.base import Base
 
@@ -16,10 +16,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Pull the DB URL from the environment so credentials never live in alembic.ini.
-database_url = os.environ.get("DATABASE_URL")
-if database_url:
-    config.set_main_option("sqlalchemy.url", database_url)
+# Pull the DB URL from the same Settings the FastAPI app uses so that
+# alembic and the runtime load credentials from the same place (the
+# `.env` file via pydantic-settings) — going through `os.environ`
+# directly bypassed `.env` and silently fell back to an empty
+# `sqlalchemy.url` in alembic.ini.
+config.set_main_option("sqlalchemy.url", get_settings().DATABASE_URL)
 
 target_metadata = Base.metadata
 
