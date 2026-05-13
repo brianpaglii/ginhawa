@@ -41,6 +41,7 @@ from ..fsm import (
     EventBus,
     FsmSnapshot,
     Language,
+    LiveTemperatureUpdate,
     MeasurementProposed,
     RfidScanned,
     SessionFSM,
@@ -412,6 +413,14 @@ class KioskMainWindow(QMainWindow):
         # translated into FSM triggers / DB writes.
         self._bus.subscribe(RfidScanned, self._on_rfid_scanned_event)
         self._bus.subscribe(MeasurementProposed, self._on_measurement_proposed_event)
+        # Temperature stream → live preview; persistence only on
+        # citizen-tap (see _on_capture_temperature_requested).
+        self._bus.subscribe(
+            LiveTemperatureUpdate, self._on_live_temperature_update_event
+        )
+        self._measuring_vitals_screen.capture_temperature_requested.connect(
+            self._on_capture_temperature_requested
+        )
 
     # ------------------------------------------------------------------
     # FSM-driven view switching
@@ -817,6 +826,44 @@ class KioskMainWindow(QMainWindow):
         self._db.flush()
         _log.info("main_window.citizen_identified", citizen_found=citizen is not None)
         self._fsm.citizen_identified(citizen)
+
+    async def _on_live_temperature_update_event(
+        self, event: LiveTemperatureUpdate
+    ) -> None:
+        """Forward MLX90640 live updates to the MEASURING_VITALS screen.
+
+        Gated on FSM state so a publish that arrives while the citizen
+        is still on IDLE / LANGUAGE_SELECT / PATH_CHOICE doesn't
+        flicker into a hidden screen's labels. Outside MEASURING_VITALS
+        the update is dropped silently — the ESP32 publishes
+        continuously and we don't want to budget the kiosk's UI to
+        process bursts of stale data.
+        """
+        if self._fsm.state != State.MEASURING_VITALS:
+            return
+        self._measuring_vitals_screen.set_live_temperature(event.value, event.unit)
+
+    def _on_capture_temperature_requested(self, value: float) -> None:
+        """Citizen tapped the Capture Temperature button.
+
+        Publish a :class:`MeasurementProposed` for the FSM persistence
+        path with the kiosk's standard temperature fields (unit "C",
+        source_device "esp32_a_mlx90640"). The existing
+        ``_on_measurement_proposed_event`` handler validates, persists,
+        and updates the captured list — same path every other
+        measurement type takes.
+        """
+        self._publish_async(
+            self._bus.publish(
+                MeasurementProposed(
+                    measurement_type="temperature",
+                    value=value,
+                    unit="C",
+                    source_device="esp32_a_mlx90640",
+                    claimed_is_valid=True,
+                )
+            )
+        )
 
     async def _on_measurement_proposed_event(self, event: MeasurementProposed) -> None:
         # Validate, persist, and update the live screen.

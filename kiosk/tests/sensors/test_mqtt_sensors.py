@@ -33,13 +33,17 @@ async def test_mock_mqtt_subscriber_lifecycle(bus: EventBus) -> None:
     assert sensor.is_running is False
 
 
-# Verifies the mock routes each topic-suffix to the right
-# MeasurementProposed event (measurement_type matches the suffix).
-# Mortality: would fail if topic-to-measurement-type routing were
-# broken.
+# Verifies the mock routes each topic-suffix to the right event:
+# spo2 / heart_rate / height → MeasurementProposed; temperature →
+# LiveTemperatureUpdate (the MLX90640 stream is continuous and the
+# citizen taps Capture to persist; see ``MeasuringVitalsScreen``).
+# Mortality: would fail if topic-to-event routing were broken OR if
+# temperature were re-routed back through MeasurementProposed.
 @pytest.mark.asyncio
 async def test_mock_mqtt_subscriber_publishes_event_for_each_topic(
-    bus: EventBus, captured_measurements: list[MeasurementProposed]
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    captured_live_temperatures: list,
 ) -> None:
     sensor = MockMqttSensors(bus)
     await sensor.simulate_publish("spo2", 98.0, "%")
@@ -47,19 +51,27 @@ async def test_mock_mqtt_subscriber_publishes_event_for_each_topic(
     await sensor.simulate_publish("temperature", 36.5, "C")
     await sensor.simulate_publish("height", 165.0, "cm")
 
+    # Three measurement-types in the persisted channel; temperature
+    # NOT here.
     types = [m.measurement_type for m in captured_measurements]
-    assert types == ["spo2", "heart_rate", "temperature", "height"]
+    assert types == ["spo2", "heart_rate", "height"]
+    # Temperature flows through the live-preview channel.
+    assert len(captured_live_temperatures) == 1
+    assert captured_live_temperatures[0].value == 36.5
+    assert captured_live_temperatures[0].unit == "C"
 
 
 # Verifies the real subscriber's _handle_message_payload routes each
-# topic to the correct event. The four expected topics produce four
-# MeasurementProposed events.
+# topic to the correct event class. Same split as the mock test: the
+# three persisted types flow through MeasurementProposed, temperature
+# through LiveTemperatureUpdate.
 # Mortality: would fail if the topic-routing dict were truncated or
-# the suffix-extraction broken.
+# the temperature/MeasurementProposed split were reverted.
 @pytest.mark.asyncio
 async def test_mqtt_subscriber_publishes_event_for_each_topic(
     bus: EventBus,
     captured_measurements: list[MeasurementProposed],
+    captured_live_temperatures: list,
     db_session: Session,
 ) -> None:
     set_device_config(db_session, "kiosk_id", _DEVICE_ID)
@@ -83,7 +95,9 @@ async def test_mqtt_subscriber_publishes_event_for_each_topic(
         await sub._handle_message_payload(topic, body)
 
     types = {m.measurement_type for m in captured_measurements}
-    assert types == {"spo2", "heart_rate", "temperature", "height"}
+    assert types == {"spo2", "heart_rate", "height"}
+    assert len(captured_live_temperatures) == 1
+    assert captured_live_temperatures[0].value == 36.5
 
 
 # Verifies malformed JSON is logged and dropped — no event, no crash.

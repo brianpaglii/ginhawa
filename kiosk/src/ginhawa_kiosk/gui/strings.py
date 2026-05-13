@@ -92,6 +92,13 @@ class _GuiStrings:
     measuring_vitals_status_waiting: str
     measuring_vitals_status_connected: str
     measuring_vitals_status_failed: str
+    # Temperature live-preview + capture affordance (MLX90640 streams
+    # continuously; citizen taps Capture to freeze and persist).
+    measuring_vitals_temperature_instruction: str
+    measuring_vitals_temperature_capture_button: str
+    measuring_vitals_temperature_recapture_button: str
+    measuring_vitals_temperature_current_prefix: str
+    measuring_vitals_temperature_captured_prefix: str
 
     # MeasuringAnthroScreen
     measuring_anthro_title: str
@@ -186,6 +193,14 @@ _EN = _GuiStrings(
         "until the reading appears."
     ),
     measuring_vitals_capturing="Capturing... please wait.",
+    measuring_vitals_temperature_instruction=(
+        "Place the thermal sensor on your forehead. Tap Capture "
+        "when the value stabilizes."
+    ),
+    measuring_vitals_temperature_capture_button="Capture Temperature",
+    measuring_vitals_temperature_recapture_button="Recapture Temperature",
+    measuring_vitals_temperature_current_prefix="Current",
+    measuring_vitals_temperature_captured_prefix="Captured",
     measuring_vitals_status_waiting="Waiting for cuff...",
     measuring_vitals_status_connected=(
         "Connected. Press START on the cuff to take a reading."
@@ -289,6 +304,14 @@ _TL = _GuiStrings(
         "nakatigil hanggang lumitaw ang sukat."
     ),
     measuring_vitals_capturing="Sinusukat... pakihintay.",
+    measuring_vitals_temperature_instruction=(
+        "Ilagay ang sensor ng temperatura sa inyong noo. Tapikin "
+        "ang Capture kapag tumigil na ang bilang."
+    ),
+    measuring_vitals_temperature_capture_button="I-capture ang Temperatura",
+    measuring_vitals_temperature_recapture_button="I-capture Muli",
+    measuring_vitals_temperature_current_prefix="Kasalukuyan",
+    measuring_vitals_temperature_captured_prefix="Na-capture",
     measuring_vitals_status_waiting="Hinihintay ang cuff...",
     measuring_vitals_status_connected=(
         "Konektado. Pindutin ang START sa cuff para magsukat."

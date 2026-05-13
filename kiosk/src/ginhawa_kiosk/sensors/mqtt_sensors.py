@@ -46,7 +46,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db.models import DeviceConfig
-from ..fsm.event_bus import EventBus, MeasurementProposed
+from ..fsm.event_bus import EventBus, LiveTemperatureUpdate, MeasurementProposed
 from .base import Sensor, SensorUnavailable
 
 
@@ -99,7 +99,8 @@ class MockMqttSensors(Sensor):
         Same routing logic the real subscriber uses, so unit-test
         wiring is identical between mock and real.
         """
-        await _route_to_event(self._bus, topic_suffix, value, unit)
+        captured_at = datetime.now(timezone.utc).isoformat()
+        await _emit_for_payload(self._bus, topic_suffix, value, unit, captured_at)
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +278,7 @@ class MqttSensorSubscriber(Sensor):
             captured_at = payload_captured_at
         else:
             captured_at = datetime.now(timezone.utc).isoformat()
-        await _route_to_event(self._bus, topic_suffix, value, unit)
+        await _emit_for_payload(self._bus, topic_suffix, value, unit, captured_at)
         # Liveness ping for bench testing — fires only AFTER the event
         # bus accepted the message, so a journalctl grep for
         # ``mqtt.message_routed`` is a reliable success marker. The
@@ -298,6 +299,32 @@ class MqttSensorSubscriber(Sensor):
 # ---------------------------------------------------------------------------
 # Shared routing — used by both mock and real
 # ---------------------------------------------------------------------------
+
+
+async def _emit_for_payload(
+    bus: EventBus,
+    topic_suffix: str,
+    value: float,
+    unit: str,
+    captured_at: str,
+) -> None:
+    """Dispatch one payload to the right event class.
+
+    Temperature splits off into :class:`LiveTemperatureUpdate` — the
+    MLX90640 streams continuously regardless of whether the citizen
+    has positioned the sensor on their forehead, so we display each
+    update live and only emit :class:`MeasurementProposed` on a
+    citizen tap (see ``MeasuringVitalsScreen.capture_temperature_requested``).
+    Every other measurement type goes through ``_route_to_event``
+    as before — the sensor adapters for SpO2 / weight / BP / height
+    only publish a value when one is genuinely captured.
+    """
+    if topic_suffix == "temperature":
+        await bus.publish(
+            LiveTemperatureUpdate(value=value, unit=unit, captured_at=captured_at)
+        )
+        return
+    await _route_to_event(bus, topic_suffix, value, unit)
 
 
 async def _route_to_event(

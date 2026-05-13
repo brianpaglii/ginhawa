@@ -16,7 +16,12 @@ from ginhawa_kiosk.db.session import (
     init_database,
     make_session_factory,
 )
-from ginhawa_kiosk.fsm import EventBus, MeasurementProposed, RfidScanned
+from ginhawa_kiosk.fsm import (
+    EventBus,
+    LiveTemperatureUpdate,
+    MeasurementProposed,
+    RfidScanned,
+)
 
 
 _TEST_KEY = "0" * 64  # pragma: allowlist secret
@@ -71,6 +76,24 @@ def captured_measurements(bus: EventBus) -> list[MeasurementProposed]:
         captured.append(event)
 
     bus.subscribe(MeasurementProposed, _handler)
+    return captured
+
+
+@pytest.fixture
+def captured_live_temperatures(bus: EventBus) -> list[LiveTemperatureUpdate]:
+    """Sibling of captured_measurements for the temperature-only path.
+
+    The MLX90640 stream no longer maps to ``MeasurementProposed``
+    (citizens tap Capture to persist). Tests verifying the topic-
+    routing now assert that temperature flows here while spo2 /
+    heart_rate / height flow through ``captured_measurements``.
+    """
+    captured: list[LiveTemperatureUpdate] = []
+
+    async def _handler(event: LiveTemperatureUpdate) -> None:
+        captured.append(event)
+
+    bus.subscribe(LiveTemperatureUpdate, _handler)
     return captured
 
 

@@ -110,6 +110,25 @@ class MeasurementProposed(Event):
     validation_notes: str | None = None
 
 
+class LiveTemperatureUpdate(Event):
+    """Live preview value off the MLX90640's MQTT stream.
+
+    Distinct from :class:`MeasurementProposed`: the MLX90640 publishes
+    continuously (every ~3–5 s) regardless of whether the citizen has
+    positioned the thermal sensor on their forehead. Persisting every
+    publish would silently lock in a room-temperature reading taken
+    before the citizen lifted the sensor. So the MQTT subscriber emits
+    THIS event for the temperature stream, which the MEASURING_VITALS
+    screen consumes for a live "Current: 36.7 °C" display only. A
+    citizen tap on the screen's Capture button then re-emits the
+    held value as a :class:`MeasurementProposed` for persistence.
+    """
+
+    value: float
+    unit: str  # "C" — the unit string published by the ESP32 firmware
+    captured_at: str  # ISO 8601; when ESP32-A published OR kiosk-stamped
+
+
 class MeasurementPathComplete(Event):
     pass
 
