@@ -19,6 +19,14 @@ This README is for the kiosk team. Project-wide context lives in the
   build, so no system package is required.
 - **For BLE on Linux:** BlueZ (`bluez`, `bluez-tools`). Bleak talks to
   it. Mock mode does not need BlueZ.
+- **For the on-screen keyboard on the touchscreen kiosk** (production
+  deployment only): `qml-module-qtquick-virtualkeyboard` +
+  `qt6-virtualkeyboard-plugin`. Without these the `QT_IM_MODULE`
+  selector set in [`__main__.py`](src/ginhawa_kiosk/__main__.py)
+  resolves to nothing and a citizen with no hardware keyboard can't
+  fill in the register form. Not required for laptop / mock-mode
+  development. Install command lives in
+  [`docs/phase-0-plan.md`](../docs/phase-0-plan.md) §1.
 
 ## Install
 

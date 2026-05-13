@@ -1,10 +1,17 @@
 """PATH_CHOICE: vitals / anthropometric / full.
 
 Three :class:`SectionCard` tiles in a horizontal row. Each card hosts
-an icon-paired title (emoji + short label), a description of the
-measurements that path captures, and a primary "Start" button.
+a large Unicode icon glyph, a short localized title, a description
+of the measurements that path captures, and a primary "Start" button.
 Emits :attr:`path_selected` with the chosen path string; the main
 window forwards to ``fsm.path_selected(path)``.
+
+Icon glyphs are picked from the BMP Symbol blocks (♥ U+2665, ⚖
+U+2696, ✚ U+271A) rather than the colour-emoji blocks (💉 / 📏 /
+🩺). Pi OS doesn't ship a colour-emoji font by default; without one
+Qt renders the picture emoji as tofu boxes. The BMP symbols are
+plain text glyphs present in DejaVu Sans / Noto Sans and they
+recolour cleanly via QSS ``color`` on the ``cardIcon`` selector.
 
 The buttons keep their legacy ``path_button_*`` objectNames so the
 existing GUI tests that look them up by name continue to find them.
@@ -19,6 +26,13 @@ from ..strings import Language, get_strings
 from ..widgets.primary_button import PrimaryButton
 from ..widgets.section_card import SectionCard
 from .base import BaseScreen
+
+
+# Unicode symbol glyphs in the Misc Symbols / Dingbats blocks — these
+# render reliably without a colour-emoji font.
+_ICON_VITALS = "♥"  # ♥ HEART (pulse / vitals)
+_ICON_ANTHRO = "⚖"  # ⚖ SCALES (body measurements)
+_ICON_FULL = "✚"  # ✚ HEAVY GREEK CROSS (medical / full check)
 
 
 class PathChoiceScreen(BaseScreen):
@@ -37,23 +51,28 @@ class PathChoiceScreen(BaseScreen):
         self._help.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Three service cards. _build_card returns the card frame, its
-        # description label, and the Start button so on_enter() can
-        # update text per language without rebuilding the layout.
+        # title label, description label, and Start button so
+        # on_enter() can swap per-language text without rebuilding.
         (
             self._vitals_card,
+            self._vitals_title,
             self._vitals_desc,
             self._vitals_button,
-        ) = self._build_card("path_button_vitals", "vitals")
+        ) = self._build_card(_ICON_VITALS, "path_button_vitals", "vitals")
         (
             self._anthro_card,
+            self._anthro_title,
             self._anthro_desc,
             self._anthro_button,
-        ) = self._build_card("path_button_anthropometric", "anthropometric")
+        ) = self._build_card(
+            _ICON_ANTHRO, "path_button_anthropometric", "anthropometric"
+        )
         (
             self._full_card,
+            self._full_title,
             self._full_desc,
             self._full_button,
-        ) = self._build_card("path_button_full", "full")
+        ) = self._build_card(_ICON_FULL, "path_button_full", "full")
 
         cards_row = QHBoxLayout()
         cards_row.setSpacing(32)
@@ -72,11 +91,20 @@ class PathChoiceScreen(BaseScreen):
         self.setLayout(layout)
 
     def _build_card(
-        self, button_object_name: str, path_value: str
-    ) -> tuple[SectionCard, QLabel, PrimaryButton]:
-        # Passing title="" creates the cardTitle label up-front so
-        # on_enter() can swap text per language via set_title.
-        card = SectionCard(title="")
+        self, icon_glyph: str, button_object_name: str, path_value: str
+    ) -> tuple[SectionCard, QLabel, QLabel, PrimaryButton]:
+        # SectionCard's title slot is left empty — the cardTitle label
+        # is hand-placed inside content_layout below the icon so the
+        # vertical order is icon → title → description → button.
+        card = SectionCard()
+
+        icon = QLabel(icon_glyph)
+        icon.setObjectName("cardIcon")
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel()
+        title.setObjectName("cardTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         desc = QLabel()
         desc.setObjectName("body")
@@ -90,10 +118,12 @@ class PathChoiceScreen(BaseScreen):
         button.setObjectName(button_object_name)
         button.clicked.connect(lambda: self.path_selected.emit(path_value))
 
+        card.add_widget(icon)
+        card.add_widget(title)
         card.add_widget(desc)
         card.content_layout.addStretch(1)
         card.add_widget(button)
-        return card, desc, button
+        return card, title, desc, button
 
     def on_enter(self, language: Language) -> None:
         super().on_enter(language)
@@ -102,10 +132,10 @@ class PathChoiceScreen(BaseScreen):
         self._title.setText(s.path_choice_title)
         self._help.setText(s.path_choice_help)
 
-        # Card titles: emoji + short name.
-        self._vitals_card.set_title(f"\U0001f489  {s.path_choice_vitals_title}")
-        self._anthro_card.set_title(f"\U0001f4cf  {s.path_choice_anthropometric_title}")
-        self._full_card.set_title(f"\U0001fa7a  {s.path_choice_full_title}")
+        # Card titles: short localized name (icon already rendered).
+        self._vitals_title.setText(s.path_choice_vitals_title)
+        self._anthro_title.setText(s.path_choice_anthropometric_title)
+        self._full_title.setText(s.path_choice_full_title)
 
         # Descriptions: the existing long-form path_choice_* strings.
         self._vitals_desc.setText(s.path_choice_vitals)

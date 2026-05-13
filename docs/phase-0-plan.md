@@ -192,6 +192,8 @@ sudo apt install -y \
     mosquitto mosquitto-clients \
     qt6-base-dev qt6-wayland \
     libqt6gui6 libqt6widgets6 \
+    qml-module-qtquick-virtualkeyboard \
+    qt6-virtualkeyboard-plugin \
     python3-pip pipx \
     sqlcipher \
     libgpiod2

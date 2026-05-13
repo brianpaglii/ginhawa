@@ -42,7 +42,11 @@ class BrandedFooter(QWidget):
 
         layout.addStretch(1)
 
-        self._network = QLabel("⚫ Offline")
+        # Initial state matches set_network_online(False): open circle
+        # for offline (Unicode text glyph, not the emoji-presentation
+        # ⚫ U+26AB which renders as tofu without an emoji font on
+        # Pi OS).
+        self._network = QLabel("○ Offline")
         self._network.setObjectName("footerNetwork")
         self._network.setAlignment(Qt.AlignmentFlag.AlignRight)
         layout.addWidget(self._network)

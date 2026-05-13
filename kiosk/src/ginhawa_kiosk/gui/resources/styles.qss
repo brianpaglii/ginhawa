@@ -188,6 +188,18 @@ QLabel#cardTitle {{
     font-weight: 700;
 }}
 
+/* Card icon glyph (Unicode symbol, not emoji — emoji fonts aren't
+   reliably present on Pi OS so picture-glyphs render as tofu boxes).
+   Sized big enough to be obvious from arm's length on a 1920x1080
+   touchscreen. */
+QLabel#cardIcon {{
+    background: transparent;
+    color: {primary};
+    font-size: 96px;
+    font-weight: 400;
+    min-height: 120px;
+}}
+
 /* Measurement composite -------------------------------------------- */
 
 QLabel#measurementValue {{
@@ -463,17 +475,54 @@ QLineEdit:disabled, QSpinBox:disabled, QDateEdit:disabled, QComboBox:disabled {{
     border-color: {border};
 }}
 
+/* Sex radio buttons on register_form — each row is a wide rounded
+   touch target with a strong selected-state indication (border,
+   background tint, weight, AND a filled indicator), so the chosen
+   option is unambiguous from arm's length. The 36 px indicator is
+   ~2.5x Qt's default. */
 QRadioButton {{
-    background: transparent;
+    background-color: {background};
     color: {text_primary};
-    font-size: {body_size}px;
-    spacing: 12px;
-    padding: 8px;
+    font-size: {body_lg_size}px;
+    padding: 16px 24px;
+    min-height: 80px;
+    spacing: 16px;
+    border: 2px solid {border};
+    border-radius: 12px;
+    margin: 8px;
+}}
+
+QRadioButton:hover {{
+    border-color: {primary_light};
+    background-color: {surface};
+}}
+
+QRadioButton:checked {{
+    border-color: {primary};
+    background-color: {surface};
+    color: {primary};
+    font-weight: 700;
 }}
 
 QRadioButton::indicator {{
-    width: 28px;
-    height: 28px;
+    width: 36px;
+    height: 36px;
+}}
+
+QRadioButton::indicator:unchecked {{
+    border: 3px solid {border};
+    border-radius: 18px;
+    background-color: {background};
+}}
+
+QRadioButton::indicator:unchecked:hover {{
+    border-color: {primary_light};
+}}
+
+QRadioButton::indicator:checked {{
+    border: 3px solid {primary};
+    border-radius: 18px;
+    background-color: {primary};
 }}
 
 /* Generic QPushButton (when not primary/secondary) gets the
@@ -500,6 +549,95 @@ QPushButton:pressed {{
 QPushButton:disabled {{
     color: {text_secondary};
     border-color: {border};
+}}
+
+/* DOB input + calendar popup --------------------------------------- */
+
+/* The QDateEdit itself styled to match the other form inputs, with a
+   widened drop-down arrow so a citizen can hit it cleanly with a
+   fingertip on the touchscreen. */
+QDateEdit#register_dob_input {{
+    background-color: {background};
+    color: {text_primary};
+    border: 2px solid {border};
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: {body_size}px;
+    min-height: 64px;
+}}
+
+QDateEdit#register_dob_input:focus {{
+    border-color: {primary};
+}}
+
+QDateEdit#register_dob_input::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: right;
+    width: 56px;
+    border: none;
+    background-color: {primary};
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+}}
+
+/* QCalendarWidget popup — sized for finger taps on a 1920x1080 panel
+   instead of Qt's default mouse-friendly cells. The min-width /
+   min-height push the popup well past the cramped default so each
+   day cell ends up >= ~64x48 px. */
+QCalendarWidget {{
+    background-color: {background};
+    min-width: 560px;
+    min-height: 480px;
+}}
+
+QCalendarWidget QToolButton {{
+    color: {text_on_primary};
+    background-color: {primary};
+    font-size: {body_size}px;
+    font-weight: 600;
+    min-height: 48px;
+    margin: 4px;
+    padding: 8px 16px;
+    border-radius: 6px;
+}}
+
+QCalendarWidget QToolButton:hover {{
+    background-color: {primary_dark};
+}}
+
+QCalendarWidget QMenu {{
+    background-color: {background};
+    color: {text_primary};
+    font-size: {body_size}px;
+}}
+
+QCalendarWidget QSpinBox {{
+    font-size: {body_size}px;
+    color: {text_primary};
+    min-height: 48px;
+    padding: 4px 8px;
+}}
+
+QCalendarWidget QAbstractItemView {{
+    background-color: {background};
+    color: {text_primary};
+    selection-background-color: {primary};
+    selection-color: {text_on_primary};
+    font-size: {body_lg_size}px;
+    outline: 0;
+}}
+
+QCalendarWidget QAbstractItemView:enabled {{
+    color: {text_primary};
+}}
+
+QCalendarWidget QAbstractItemView:disabled {{
+    color: {text_secondary};
+}}
+
+QCalendarWidget QWidget#qt_calendar_navigationbar {{
+    background-color: {surface};
+    min-height: 64px;
 }}
 
 /* List widgets used on measuring + report screens ------------------- */

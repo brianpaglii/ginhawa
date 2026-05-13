@@ -72,7 +72,15 @@ class RegisterFormScreen(BaseScreen):
         self._dob_input.setObjectName("register_dob_input")
         self._dob_input.setCalendarPopup(True)
         self._dob_input.setDisplayFormat("yyyy-MM-dd")
-        self._dob_input.setDate(QDate(2000, 1, 1))
+        # Bounds: 1900 covers everyone alive; nobody is born in the
+        # future. Qt clamps setDate() to this range automatically, so
+        # the BHW can't accidentally enter an impossible DOB.
+        self._dob_input.setMinimumDate(QDate(1900, 1, 1))
+        self._dob_input.setMaximumDate(QDate.currentDate())
+        # Default to ~30 years ago — covers the adult demographic that
+        # makes up the typical kiosk user. BHWs adjust via the
+        # calendar popup; the year header lets them jump by decade.
+        self._dob_input.setDate(QDate.currentDate().addYears(-30))
         self._barangay_input = QLineEdit()
         self._barangay_input.setObjectName("register_barangay_input")
         self._phone_input = QLineEdit()
@@ -114,11 +122,16 @@ class RegisterFormScreen(BaseScreen):
         form.addRow(self._name_label, self._name_input)
         form.addRow(self._dob_label, self._dob_input)
 
+        # Each radio gets an equal third of the form width so the
+        # styled rounded tap target stretches across; the trailing
+        # stretch is intentionally NOT used (it would collapse the
+        # radios to their content width and break the "wide button"
+        # affordance the QSS counts on).
         sex_row = QHBoxLayout()
-        sex_row.addWidget(self._sex_male)
-        sex_row.addWidget(self._sex_female)
-        sex_row.addWidget(self._sex_other)
-        sex_row.addStretch(1)
+        sex_row.setSpacing(16)
+        sex_row.addWidget(self._sex_male, 1)
+        sex_row.addWidget(self._sex_female, 1)
+        sex_row.addWidget(self._sex_other, 1)
         form.addRow(self._sex_label, sex_row)
 
         form.addRow(self._barangay_label, self._barangay_input)
@@ -164,7 +177,11 @@ class RegisterFormScreen(BaseScreen):
 
     def _reset_inputs(self) -> None:
         self._name_input.clear()
-        self._dob_input.setDate(QDate(2000, 1, 1))
+        # Mirror the constructor default — 30 years ago — so a
+        # "Change language" round-trip lands on the same starting
+        # state, not a hard-coded year that drifts off the typical
+        # adult kiosk user as time passes.
+        self._dob_input.setDate(QDate.currentDate().addYears(-30))
         self._barangay_input.setText(self._default_barangay)
         self._phone_input.clear()
         self._sex_group.setExclusive(False)

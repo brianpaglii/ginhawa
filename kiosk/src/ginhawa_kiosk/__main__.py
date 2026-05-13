@@ -35,12 +35,24 @@ individual layers (FSM, screens, printer, sensors).
 
 from __future__ import annotations
 
-import asyncio
-import sys
+import os
 
-import qasync
-import structlog
-from PyQt6.QtWidgets import QApplication
+# QT_IM_MODULE selects Qt's input-method plugin. Must be set BEFORE
+# any Qt import (qasync pulls in PyQt6 transitively); once Qt's GUI
+# plugin loader has run the variable is read-only and the on-screen
+# keyboard plugin (shipped by the qt6-virtualkeyboard-plugin apt
+# package on the Pi) never loads, so QLineEdit / QSpinBox / QDateEdit
+# never get a popup keyboard and citizen registration on a kiosk
+# without a hardware keyboard is impossible. See docs/phase-0-plan.md
+# §1 for the apt-install requirement.
+os.environ["QT_IM_MODULE"] = "qtvirtualkeyboard"
+
+import asyncio  # noqa: E402
+import sys  # noqa: E402
+
+import qasync  # noqa: E402
+import structlog  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 from sqlalchemy import select
 from sqlalchemy.orm import Session as SAOrmSession
 
