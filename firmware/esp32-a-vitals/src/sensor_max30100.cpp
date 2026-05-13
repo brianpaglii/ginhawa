@@ -2,9 +2,12 @@
 //
 // Library: oxullo/Arduino-MAX30100 (PulseOximeter wrapper around
 // the MAX30100 register set; identical to the chip on the M5Stack
-// Mini Heart Rate Unit per the bench wiring). Provides update() +
-// getSpO2()/getHeartRate(). update() must be called at high
-// frequency for the beat detector to see edges.
+// Mini Heart Rate Unit per the bench wiring). update() must be
+// called at high frequency to drive the library's internal beat
+// detector — that's what makes getSpO2() converge on a stable
+// reading. Heart rate is read from the chip only by the diagnostic
+// dump (chip-behavior signal); the production tick collects only
+// SpO2.
 //
 // I²C bus: oxullo's library reaches Wire directly via the global
 // instance (no TwoWire setter), so this sensor MUST live on Wire
@@ -21,12 +24,10 @@
 namespace {
 PulseOximeter g_pox;
 
-// Rolling buffers. We hold up to MAX30100_SAMPLE_BUFFER (64)
-// stable samples; consume_stable() drains and resets.
+// Rolling buffer of in-range SpO2 samples; consume_stable() drains
+// and resets every 30 s reporting window.
 float g_spo2_buf[MAX30100_SAMPLE_BUFFER];
 int g_spo2_count = 0;
-float g_hr_buf[MAX30100_SAMPLE_BUFFER];
-int g_hr_count = 0;
 
 // Append-with-overwrite: when full, drop the oldest sample so the
 // median tracks recent state instead of an old fixed window.
@@ -70,16 +71,11 @@ bool sensor_max30100_init(TwoWire& /*bus*/) {
 void sensor_max30100_tick() {
     g_pox.update();
     float spo2 = g_pox.getSpO2();
-    float hr = g_pox.getHeartRate();
-    // The library returns 0.0 until it has stabilised; SPO2_MIN /
-    // HR_MIN cull those startup values + grossly out-of-range
-    // readings (e.g., the spurious 200+ bpm spikes the algorithm
-    // sometimes emits during finger-on transients).
+    // The library returns 0.0 until it has stabilised; the SPO2_MIN
+    // floor culls those startup values plus any grossly out-of-range
+    // readings the algorithm emits during finger-on transients.
     if (spo2 >= SPO2_MIN && spo2 <= SPO2_MAX) {
         _push(g_spo2_buf, g_spo2_count, spo2);
-    }
-    if (hr >= HR_MIN && hr <= HR_MAX) {
-        _push(g_hr_buf, g_hr_count, hr);
     }
 }
 
@@ -221,34 +217,26 @@ void sensor_max30100_diagnostic_dump(TwoWire& bus) {
 
     Serial.printf(
         "DIAG MAX30100: part=0x%02X(%s) wr=%d rd=%d wr_delta=%d queued=%d "
-        "ir=%u red=%u%s lib spo2=%.2f hr=%.2f window spo2=%d/%d hr=%d/%d\n",
+        "ir=%u red=%u%s lib spo2=%.2f hr=%.2f window spo2=%d/%d\n",
         part_id, chip, wr, rd, wr_delta, queued, ir, red,
         fifo_read_ok ? "" : " (fifo-read-fail)", lib_spo2, lib_hr,
-        g_spo2_count, MAX30100_MIN_BUFFERED_SAMPLES, g_hr_count,
-        MAX30100_MIN_BUFFERED_SAMPLES);
+        g_spo2_count, MAX30100_MIN_BUFFERED_SAMPLES);
 }
 
 VitalsReading sensor_max30100_consume_stable() {
     // Heartbeat per reporting window — silent windows otherwise look
-    // identical to a dead chip on the serial monitor, since publish-
-    // path Serial.printfs only fire when the threshold is met.
-    Serial.printf("MAX30100 window: spo2=%d/%d hr=%d/%d\n",
-                  g_spo2_count, MAX30100_MIN_BUFFERED_SAMPLES,
-                  g_hr_count, MAX30100_MIN_BUFFERED_SAMPLES);
-    VitalsReading r{false, 0.0f, false, 0.0f};
+    // identical to a dead chip on the serial monitor, since the
+    // publish-path Serial.printf only fires when the threshold is met.
+    Serial.printf("MAX30100 window: spo2=%d/%d\n",
+                  g_spo2_count, MAX30100_MIN_BUFFERED_SAMPLES);
+    VitalsReading r{false, 0.0f};
     if (g_spo2_count >= MAX30100_MIN_BUFFERED_SAMPLES) {
         r.spo2 = compute_pulse_median(g_spo2_buf, g_spo2_count);
         r.has_spo2 = true;
     }
-    if (g_hr_count >= MAX30100_MIN_BUFFERED_SAMPLES) {
-        r.heart_rate = compute_pulse_median(g_hr_buf, g_hr_count);
-        r.has_heart_rate = true;
-    }
-    // Reset for the next reporting window — even if the buffer
-    // had < MIN_BUFFERED_SAMPLES we drain it so a long initial
-    // settling window doesn't poison later windows with stale
-    // values.
+    // Reset every window even if the threshold wasn't met, so a long
+    // settling period at session start can't poison later windows
+    // with stale values.
     g_spo2_count = 0;
-    g_hr_count = 0;
     return r;
 }

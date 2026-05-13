@@ -203,6 +203,42 @@ async def test_handle_message_logs_on_success(
     assert entry["measurement_type"] == "spo2"
     assert entry["value"] == 97.0
     assert entry["unit"] == "%"
+    # Publisher-supplied captured_at is preserved verbatim.
+    assert entry["captured_at"] == "2026-05-09T12:00:00+00:00"
+
+
+# Verifies the kiosk stamps captured_at locally when the payload omits
+# the field — current ESP32 firmware does this on purpose to avoid
+# the NTP / internet dependency. The stamp is a UTC isoformat string
+# parseable as a tz-aware datetime.
+# Mortality: would fail if the fallback path were removed or if the
+# kiosk silently substituted an empty string instead of stamping.
+@pytest.mark.asyncio
+async def test_handle_message_stamps_captured_at_when_payload_omits_it(
+    bus: EventBus,
+    captured_measurements: list[MeasurementProposed],
+    db_session: Session,
+) -> None:
+    from datetime import datetime
+
+    set_device_config(db_session, "kiosk_id", _DEVICE_ID)
+    sub = MqttSensorSubscriber(bus, db_session)
+
+    topic = f"ginhawa/kiosk/{_DEVICE_ID}/sensors/spo2"
+    # No captured_at field — what current ESP32 firmware sends.
+    payload = json.dumps({"value": 97.0, "unit": "%"}).encode()
+
+    with structlog.testing.capture_logs() as logs:
+        await sub._handle_message_payload(topic, payload)
+
+    assert len(captured_measurements) == 1
+    routed = [entry for entry in logs if entry.get("event") == "mqtt.message_routed"]
+    assert len(routed) == 1
+    stamped = routed[0]["captured_at"]
+    # Round-trips through fromisoformat → tz-aware datetime in UTC.
+    parsed = datetime.fromisoformat(stamped)
+    assert parsed.utcoffset() is not None
+    assert parsed.utcoffset().total_seconds() == 0
 
 
 # Verifies the success log does NOT fire on a malformed payload —

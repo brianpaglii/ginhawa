@@ -74,7 +74,8 @@ constexpr int MLX_ROI_COL_MAX = 19;
 constexpr float TEMP_MIN_C = 30.0f;
 constexpr float TEMP_MAX_C = 42.0f;
 
-// MQTT topic suffixes.
+// MQTT topic suffixes. heart_rate is intentionally absent — the
+// kiosk receives HR from the Omron BP cuff over BLE as part of the
+// BP triple; the MAX30100 publishes only spo2.
 #define MQTT_TOPIC_SPO2 "spo2"
-#define MQTT_TOPIC_HEART_RATE "heart_rate"
 #define MQTT_TOPIC_TEMPERATURE "temperature"

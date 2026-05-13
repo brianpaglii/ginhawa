@@ -32,6 +32,8 @@ void test_median_unordered_input(void) {
 // Tests defined in sibling files — linked into the same binary.
 extern void test_encodes_height_payload(void);
 extern void test_buffer_too_small_returns_false(void);
+extern void test_encodes_payload_omits_captured_at_when_ts_null(void);
+extern void test_encodes_payload_omits_captured_at_when_ts_empty(void);
 extern void test_iso8601_placeholder(void);
 
 void setUp(void) {}
@@ -48,6 +50,8 @@ int main(int, char**) {
     // json_encode.h
     RUN_TEST(test_encodes_height_payload);
     RUN_TEST(test_buffer_too_small_returns_false);
+    RUN_TEST(test_encodes_payload_omits_captured_at_when_ts_null);
+    RUN_TEST(test_encodes_payload_omits_captured_at_when_ts_empty);
     // iso8601 placeholder (strftime is host-bound; bench-validated)
     RUN_TEST(test_iso8601_placeholder);
     return UNITY_END();

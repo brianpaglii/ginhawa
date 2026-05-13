@@ -18,7 +18,6 @@
 #include "json_encode.h"
 #include "secrets.h"
 #include "sensor_vl53l0x.h"
-#include "timestamp.h"
 #include "wifi_mqtt.h"
 
 namespace {
@@ -48,7 +47,6 @@ void setup() {
     }
 
     wifi_connect(WIFI_SSID, WIFI_PASS);
-    timestamp_sync_ntp();
 
     if (!mqtt_connect(MQTT_HOST, MQTT_PORT, MQTT_USER, MQTT_PASS)) {
         Serial.println("WARN: initial MQTT connect failed; will retry in loop");
@@ -68,11 +66,12 @@ void loop() {
         OptionalHeight reading = sensor_vl53l0x_read_smoothed();
         if (reading.has_value) {
             Serial.printf("Height: %.1f cm\n", reading.value);
-            char ts[64];
-            timestamp_now_iso8601(ts, sizeof(ts));
+            // Pass nullptr for captured_at — the kiosk's mqtt_sensors
+            // subscriber stamps capture time on receipt; the ESP32
+            // skips NTP entirely (no internet dependency).
             char payload[128];
-            if (json_encode_measurement(reading.value, MQTT_TOPIC_UNIT, ts,
-                                        payload, sizeof(payload))) {
+            if (json_encode_measurement(reading.value, MQTT_TOPIC_UNIT,
+                                        nullptr, payload, sizeof(payload))) {
                 if (!mqtt_publish_qos1(g_topic, payload)) {
                     Serial.println("WARN: mqtt publish failed");
                 }

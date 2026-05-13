@@ -11,8 +11,16 @@ Topic taxonomy (subscribed with QoS 1):
 * ``ginhawa/kiosk/<device_id>/sensors/height``       — ESP32-B
 
 Each topic carries a JSON payload ``{value: float, unit: str,
-captured_at: ISO8601}``. The kiosk's ``device_id`` is loaded from
-``device_config`` at start time.
+captured_at?: ISO8601}``. ``captured_at`` is OPTIONAL — the kiosk is
+the authoritative source of capture time and stamps a UTC timestamp
+on receipt when the publisher didn't include one. The current ESP32
+firmware omits ``captured_at`` (no NTP / no internet dependency on
+the firmware side); the bench publish script and any future firmware
+revision with reliable NTP may include it, in which case the
+publisher-supplied value is used verbatim.
+
+The kiosk's ``device_id`` is loaded from ``device_config`` at start
+time.
 
 Resilience:
 
@@ -30,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
@@ -258,6 +267,16 @@ class MqttSensorSubscriber(Sensor):
                 "mqtt.payload_missing_fields", topic=topic, error=str(exc)
             )
             return
+        # The kiosk owns capture time. Accept a payload-supplied
+        # captured_at (e.g. from the bench publish script or a future
+        # firmware revision with reliable NTP) but fall back to local
+        # UTC now if absent or malformed — current ESP32 firmware
+        # omits the field on purpose (no internet / no NTP needed).
+        payload_captured_at = decoded.get("captured_at")
+        if isinstance(payload_captured_at, str) and payload_captured_at:
+            captured_at = payload_captured_at
+        else:
+            captured_at = datetime.now(timezone.utc).isoformat()
         await _route_to_event(self._bus, topic_suffix, value, unit)
         # Liveness ping for bench testing — fires only AFTER the event
         # bus accepted the message, so a journalctl grep for
@@ -272,6 +291,7 @@ class MqttSensorSubscriber(Sensor):
             measurement_type=measurement_type,
             value=value,
             unit=unit,
+            captured_at=captured_at,
         )
 
 

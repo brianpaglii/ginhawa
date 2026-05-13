@@ -45,6 +45,8 @@ extern void test_roi_peak_finds_max_in_central_block(void);
 extern void test_roi_ignores_pixels_outside_roi(void);
 extern void test_encodes_vitals_payload(void);
 extern void test_buffer_too_small_returns_false(void);
+extern void test_encodes_payload_omits_captured_at_when_ts_null(void);
+extern void test_encodes_payload_omits_captured_at_when_ts_empty(void);
 
 void setUp(void) {}
 void tearDown(void) {}
@@ -63,5 +65,7 @@ int main(int, char**) {
     // json_encode.h
     RUN_TEST(test_encodes_vitals_payload);
     RUN_TEST(test_buffer_too_small_returns_false);
+    RUN_TEST(test_encodes_payload_omits_captured_at_when_ts_null);
+    RUN_TEST(test_encodes_payload_omits_captured_at_when_ts_empty);
     return UNITY_END();
 }
