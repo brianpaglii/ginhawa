@@ -342,7 +342,6 @@ QLabel#measuring_anthro_title {{
 }}
 
 QLabel#consent_body,
-QLabel#register_intro,
 QLabel#measuring_vitals_bp_instruction,
 QLabel#measuring_vitals_pulse_instruction,
 QLabel#measuring_anthro_height_instruction,
@@ -351,6 +350,20 @@ QLabel#measuring_anthro_temperature_instruction {{
     color: {text_primary};
     background: transparent;
     font-size: {body_size}px;
+}}
+
+/* Compact form-field label used by the register form's two-column
+   layout. Smaller than body so the input field reads as the
+   primary element of each row; secondary colour so the labels
+   recede visually next to the input borders. Zero padding /
+   margin keeps the label tight against its input. */
+QLabel#registerFieldLabel {{
+    color: {text_secondary};
+    background: transparent;
+    font-size: {body_size}px;
+    font-weight: 600;
+    padding: 0;
+    margin: 0;
 }}
 
 QLabel#path_choice_help,
@@ -698,10 +711,10 @@ QCalendarWidget QWidget#qt_calendar_navigationbar {{
    require tapping the tiny built-in spinbox. */
 QCalendarWidget#registerDobCalendar {{
     background-color: {background};
-    min-width: 600px;
-    max-width: 800px;
-    min-height: 400px;
-    max-height: 480px;
+    min-width: 560px;
+    max-width: 720px;
+    min-height: 320px;
+    max-height: 400px;
     font-size: {body_size}px;
 }}
 
@@ -743,8 +756,8 @@ QCalendarWidget#registerDobCalendar QAbstractItemView {{
 }}
 
 QCalendarWidget#registerDobCalendar QAbstractItemView::item {{
-    min-height: 44px;
-    min-width: 44px;
+    min-height: 36px;
+    min-width: 36px;
 }}
 
 QCalendarWidget#registerDobCalendar QAbstractItemView:enabled {{

@@ -236,7 +236,10 @@ class RegisterFormScreen(BaseScreen):
         self._title = QLabel()
         self._title.setObjectName("register_title")
         self._intro = QLabel()
-        self._intro.setObjectName("register_intro")
+        # bodyMuted = smaller, secondary-colour body text. The form
+        # is vertically tight; an h2-sized intro chews 60+ px better
+        # spent on the inputs.
+        self._intro.setObjectName("bodyMuted")
         self._intro.setWordWrap(True)
 
         # Form fields
@@ -276,12 +279,20 @@ class RegisterFormScreen(BaseScreen):
         self._submit_button.clicked.connect(self._on_submit_clicked)
 
         # Field labels — populated in on_enter() so they re-render on
-        # language change.
+        # language change. ``registerFieldLabel`` objectName triggers
+        # the compact form-label QSS rule (smaller font, zero
+        # margin/padding) so each label hugs its input without
+        # consuming the vertical space an h3-sized label would.
         self._name_label = QLabel()
+        self._name_label.setObjectName("registerFieldLabel")
         self._dob_label = QLabel()
+        self._dob_label.setObjectName("registerFieldLabel")
         self._sex_label = QLabel()
+        self._sex_label.setObjectName("registerFieldLabel")
         self._barangay_label = QLabel()
+        self._barangay_label.setObjectName("registerFieldLabel")
         self._phone_label = QLabel()
+        self._phone_label.setObjectName("registerFieldLabel")
 
         # Each radio gets an equal third of the form width so the
         # styled rounded tap target stretches across; the trailing
@@ -311,16 +322,16 @@ class RegisterFormScreen(BaseScreen):
         header.addWidget(self._intro)
 
         left_column = QVBoxLayout()
-        left_column.setSpacing(16)
+        left_column.setSpacing(12)
         left_column.addWidget(self._name_label)
         left_column.addWidget(self._name_input)
-        left_column.addSpacing(16)
+        left_column.addSpacing(8)
         left_column.addWidget(self._sex_label)
         left_column.addLayout(sex_row)
-        left_column.addSpacing(16)
+        left_column.addSpacing(8)
         left_column.addWidget(self._barangay_label)
         left_column.addWidget(self._barangay_input)
-        left_column.addSpacing(16)
+        left_column.addSpacing(8)
         left_column.addWidget(self._phone_label)
         left_column.addWidget(self._phone_input)
         left_column.addStretch(1)
@@ -370,7 +381,7 @@ class RegisterFormScreen(BaseScreen):
 
         outer_layout = QVBoxLayout()
         outer_layout.setContentsMargins(40, 24, 40, 24)
-        outer_layout.setSpacing(24)
+        outer_layout.setSpacing(16)
         outer_layout.addLayout(header)
         outer_layout.addLayout(columns, 1)
         outer_layout.addLayout(bottom)
