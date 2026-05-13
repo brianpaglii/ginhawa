@@ -115,6 +115,36 @@ _MEASUREMENT_LABELS: dict[Language, dict[str, str]] = {
 _VITALS_TYPES = {"systolic_bp", "diastolic_bp", "heart_rate", "spo2", "temperature"}
 _ANTHRO_TYPES = {"height", "weight"}
 
+
+def _is_measurement_allowed_for_path(
+    measurement_type: str, measurement_path: str | None
+) -> bool:
+    """Return True if a measurement type belongs to the session's path.
+
+    The Xiaomi scale BLE scanner and the ESP32 MQTT publishes are
+    always-on; they have no knowledge of the active session's
+    measurement_path. A stray advert or publish that arrives during
+    the wrong path would otherwise be persisted against the session
+    even though the citizen never asked for that measurement (audit:
+    ``docs/audits/2026-05-13-scale-prefiring-audit.md``). This helper
+    is the receipt-boundary filter that drops those prefires.
+
+    ``"full"`` admits every type; ``"vitals"`` and ``"anthropometric"``
+    admit only their own set. ``None`` and any other value are
+    conservative drops — measurement_path is non-None for the entire
+    MEASURING_* window because the FSM stamps it on PATH_CHOICE exit
+    (see ``session_fsm._after_path_selected``), so a None here means
+    a measurement arrived out of flow.
+    """
+    if measurement_path == "full":
+        return True
+    if measurement_path == "vitals":
+        return measurement_type in _VITALS_TYPES
+    if measurement_path == "anthropometric":
+        return measurement_type in _ANTHRO_TYPES
+    return False
+
+
 # Map a measurement type to the sensor whose `is_running` status
 # decides whether real readings will arrive in this session. Used
 # by the offline-placeholder seeder so the FSM doesn't hang in a
@@ -902,6 +932,30 @@ class KioskMainWindow(QMainWindow):
             _log.warning(
                 "main_window.measurement_without_session",
                 type=event.measurement_type,
+            )
+            return
+
+        # Path filter: a REAL measurement (is_valid=1) whose type
+        # doesn't belong to the active session's measurement_path is
+        # a prefire from an always-listening sensor — the Xiaomi
+        # scale's BLE scanner or one of the ESP32 MQTT publishers.
+        # Drop it before persistence so the session's measurement set
+        # never accumulates rows the citizen didn't ask for. Offline
+        # placeholders and out-of-range invalid readings (both
+        # ``is_valid=0``) are exempt: placeholders are seeded by the
+        # FSM itself with full state knowledge, and invalid reals are
+        # kept for diagnostic review. Audit:
+        # ``docs/audits/2026-05-13-scale-prefiring-audit.md``.
+        if is_valid_int == 1 and not _is_measurement_allowed_for_path(
+            event.measurement_type,
+            self._fsm.current_session.measurement_path,
+        ):
+            _log.warning(
+                "main_window.measurement_path_mismatch_dropped",
+                measurement_type=event.measurement_type,
+                measurement_path=self._fsm.current_session.measurement_path,
+                source_device=event.source_device,
+                session_id=self._fsm.current_session.id,
             )
             return
 
