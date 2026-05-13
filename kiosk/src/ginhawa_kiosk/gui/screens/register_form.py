@@ -40,7 +40,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QRadioButton,
-    QScrollArea,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -295,61 +294,70 @@ class RegisterFormScreen(BaseScreen):
         sex_row.addWidget(self._sex_female, 1)
         sex_row.addWidget(self._sex_other, 1)
 
-        # Flat vertical layout (label-above-input) inside a scroll
-        # container. The inline calendar is too wide to share a row
-        # with its label in a QFormLayout, and even at the reduced
-        # max-height of ~440 px the full form (title + intro + name
-        # + DOB + sex + barangay + phone + submit) can exceed 1080.
-        # QScrollArea handles overflow cleanly; the chrome row stays
-        # OUTSIDE the scroll area so Cancel / Change Language remain
-        # visible regardless of scroll position.
-        form_container = QWidget()
-        form_layout = QVBoxLayout(form_container)
-        form_layout.setSpacing(16)
-        form_layout.addWidget(self._title)
-        form_layout.addWidget(self._intro)
-        form_layout.addSpacing(8)
-        form_layout.addWidget(self._name_label)
-        form_layout.addWidget(self._name_input)
-        form_layout.addWidget(self._dob_label)
-        form_layout.addWidget(self._dob_input)
-        form_layout.addWidget(self._sex_label)
-        form_layout.addLayout(sex_row)
-        form_layout.addWidget(self._barangay_label)
-        form_layout.addWidget(self._barangay_input)
-        form_layout.addWidget(self._phone_label)
-        form_layout.addWidget(self._phone_input)
-        form_layout.addWidget(self._error_label)
-        form_layout.addWidget(
-            self._submit_button, alignment=Qt.AlignmentFlag.AlignRight
-        )
+        # Two-column layout to keep text inputs (left column, upper
+        # 60 % of the screen) outside the virtual keyboard's
+        # bottom-40 % occupancy zone. The calendar (right column)
+        # doesn't open the keyboard so its lower portion can sit
+        # under it without interaction loss. An earlier revision
+        # used QApplication.focusChanged + QTimer.singleShot to
+        # auto-scroll the focused widget above the keyboard, but
+        # that hook fired on calendar-cell focus during touch and
+        # shifted the grid mid-tap (citizen tapped January, got
+        # March) — see commit a765e7a. Don't re-introduce focus
+        # hooks; rely on the layout instead.
+        header = QVBoxLayout()
+        header.setSpacing(8)
+        header.addWidget(self._title)
+        header.addWidget(self._intro)
 
-        self._scroll_area = QScrollArea()
-        self._scroll_area.setObjectName("registerScrollArea")
-        self._scroll_area.setWidget(form_container)
-        self._scroll_area.setWidgetResizable(True)
-        self._scroll_area.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self._scroll_area.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        left_column = QVBoxLayout()
+        left_column.setSpacing(16)
+        left_column.addWidget(self._name_label)
+        left_column.addWidget(self._name_input)
+        left_column.addSpacing(16)
+        left_column.addWidget(self._sex_label)
+        left_column.addLayout(sex_row)
+        left_column.addSpacing(16)
+        left_column.addWidget(self._barangay_label)
+        left_column.addWidget(self._barangay_input)
+        left_column.addSpacing(16)
+        left_column.addWidget(self._phone_label)
+        left_column.addWidget(self._phone_input)
+        left_column.addStretch(1)
+
+        right_column = QVBoxLayout()
+        right_column.setSpacing(16)
+        right_column.addWidget(self._dob_label)
+        right_column.addWidget(self._dob_input)
+        right_column.addStretch(1)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(40)
+        columns.addLayout(left_column, 1)
+        columns.addLayout(right_column, 1)
+
+        # Error banner above the submit row so the citizen reads it
+        # before reaching for the button. Submit is centred so the
+        # primary affordance is visually balanced under both columns.
+        bottom = QVBoxLayout()
+        bottom.setSpacing(12)
+        bottom.addWidget(self._error_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        submit_row = QHBoxLayout()
+        submit_row.addStretch(1)
+        submit_row.addWidget(self._submit_button)
+        submit_row.addStretch(1)
+        bottom.addLayout(submit_row)
 
         outer_layout = QVBoxLayout()
         outer_layout.setContentsMargins(40, 24, 40, 24)
-        outer_layout.addWidget(self._scroll_area, 1)
+        outer_layout.setSpacing(24)
+        outer_layout.addLayout(header)
+        outer_layout.addLayout(columns, 1)
+        outer_layout.addLayout(bottom)
+        # Chrome row (Cancel / Change Language) sits below everything
+        # else so it stays in the same place as every other screen.
         outer_layout.addLayout(self._build_chrome_row())
         self.setLayout(outer_layout)
-
-        # Note: an earlier revision auto-scrolled the form whenever a
-        # widget gained focus, to lift text fields above the virtual
-        # keyboard. That hook (QApplication.focusChanged → 300 ms
-        # QTimer → setValue) fired on calendar-cell focus during
-        # touch interactions and shifted the calendar mid-tap, so
-        # the citizen's "tap January" ended up registering on a
-        # different month. The auto-scroll has been removed; the
-        # citizen can drag the scroll bar manually if a field is
-        # hidden behind the keyboard.
 
     # ------------------------------------------------------------------
     # Lifecycle
