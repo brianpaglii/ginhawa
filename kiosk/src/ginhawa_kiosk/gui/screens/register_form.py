@@ -336,17 +336,37 @@ class RegisterFormScreen(BaseScreen):
         columns.addLayout(left_column, 1)
         columns.addLayout(right_column, 1)
 
-        # Error banner above the submit row so the citizen reads it
-        # before reaching for the button. Submit is centred so the
-        # primary affordance is visually balanced under both columns.
+        # Trigger _build_chrome_row()'s side effects (creates the
+        # Cancel + Change Language SecondaryButtons and wires their
+        # signals) but discard the returned QHBoxLayout — we merge
+        # the chrome buttons into the same row as Submit below, so
+        # they share vertical space instead of getting pushed past
+        # the viewport's bottom edge by the calendar's height.
+        # ``_refresh_chrome_labels`` (called from ``on_enter`` via
+        # ``BaseScreen``) still finds the buttons via the
+        # ``self._cancel_button`` / ``self._change_language_button``
+        # attributes that ``_build_chrome_row`` populated.
+        self._build_chrome_row()
+        assert self._cancel_button is not None
+        assert self._change_language_button is not None
+
+        # Error banner above the buttons so the citizen reads it
+        # before reaching for any action. One row holds all three
+        # buttons: Cancel (left, secondary) ⟷ Submit (centre,
+        # primary) ⟷ Change Language (right, secondary). Centring
+        # Submit between two stretches keeps the primary affordance
+        # visually anchored under the two columns.
         bottom = QVBoxLayout()
         bottom.setSpacing(12)
         bottom.addWidget(self._error_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        submit_row = QHBoxLayout()
-        submit_row.addStretch(1)
-        submit_row.addWidget(self._submit_button)
-        submit_row.addStretch(1)
-        bottom.addLayout(submit_row)
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(20)
+        buttons_row.addWidget(self._cancel_button)
+        buttons_row.addStretch(1)
+        buttons_row.addWidget(self._submit_button)
+        buttons_row.addStretch(1)
+        buttons_row.addWidget(self._change_language_button)
+        bottom.addLayout(buttons_row)
 
         outer_layout = QVBoxLayout()
         outer_layout.setContentsMargins(40, 24, 40, 24)
@@ -354,9 +374,6 @@ class RegisterFormScreen(BaseScreen):
         outer_layout.addLayout(header)
         outer_layout.addLayout(columns, 1)
         outer_layout.addLayout(bottom)
-        # Chrome row (Cancel / Change Language) sits below everything
-        # else so it stays in the same place as every other screen.
-        outer_layout.addLayout(self._build_chrome_row())
         self.setLayout(outer_layout)
 
     # ------------------------------------------------------------------

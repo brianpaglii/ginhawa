@@ -822,13 +822,19 @@ QPushButton#calendarDecadeForwardButton {{
 /* The built-in month-name button (Qt's internal
    ``qt_calendar_monthbutton``) is disabled in Python — its popup
    menu was unusable on touch. Override the default disabled
-   appearance so it still LOOKS like an active display label;
-   citizens shouldn't read "greyed out month" as a broken control. */
+   appearance so it still LOOKS like an active display label; render
+   in dark ``text_primary`` rather than ``text_on_primary`` because
+   the nav-bar background is the light surface colour (white-on-
+   light-beige read as invisible in bench testing on 2026-05-09).
+   ``border: none`` strips the disabled-state outline the default Qt
+   style otherwise draws around a disabled QToolButton. */
 QCalendarWidget#registerDobCalendar QToolButton#qt_calendar_monthbutton,
 QCalendarWidget#registerDobCalendar QToolButton#qt_calendar_monthbutton:disabled {{
     background-color: transparent;
-    color: {text_on_primary};
+    color: {text_primary};
+    font-size: {body_lg_size}px;
     font-weight: 700;
+    border: none;
 }}
 
 QPushButton#calendarDecadeBackButton:hover,
