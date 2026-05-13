@@ -31,10 +31,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QDate, QPoint, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtCore import QDate, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QApplication,
     QButtonGroup,
     QCalendarWidget,
     QHBoxLayout,
@@ -343,17 +341,15 @@ class RegisterFormScreen(BaseScreen):
         outer_layout.addLayout(self._build_chrome_row())
         self.setLayout(outer_layout)
 
-        # Keyboard-aware scroll: when focus enters one of the form's
-        # text fields the virtual keyboard slides up from the bottom
-        # of the screen and would otherwise cover the field. Hook
-        # QApplication.focusChanged so we can scroll the focused
-        # widget above the keyboard. The connection is best-effort:
-        # in headless tests QApplication may not exist yet, in which
-        # case the form still constructs cleanly but auto-scroll is
-        # inert.
-        app = QApplication.instance()
-        if isinstance(app, QApplication):
-            app.focusChanged.connect(self._on_focus_changed)
+        # Note: an earlier revision auto-scrolled the form whenever a
+        # widget gained focus, to lift text fields above the virtual
+        # keyboard. That hook (QApplication.focusChanged → 300 ms
+        # QTimer → setValue) fired on calendar-cell focus during
+        # touch interactions and shifted the calendar mid-tap, so
+        # the citizen's "tap January" ended up registering on a
+        # different month. The auto-scroll has been removed; the
+        # citizen can drag the scroll bar manually if a field is
+        # hidden behind the keyboard.
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -405,59 +401,6 @@ class RegisterFormScreen(BaseScreen):
         if self._sex_other.isChecked():
             return "O"
         return None
-
-    # ------------------------------------------------------------------
-    # Keyboard-aware scroll
-    # ------------------------------------------------------------------
-
-    def _on_focus_changed(self, _old: QWidget | None, new: QWidget | None) -> None:
-        # Only react when focus lands inside this screen — connection
-        # is at the QApplication level and fires for every widget.
-        if new is None:
-            return
-        parent: QWidget | None = new
-        while parent is not None and parent is not self:
-            parent = parent.parentWidget()
-        if parent is not self:
-            return
-        # 300 ms is enough for the Qt virtual keyboard's slide-up
-        # animation to settle so keyboardRectangle() reports the
-        # final geometry rather than a mid-animation value.
-        QTimer.singleShot(300, lambda: self._scroll_widget_into_view(new))
-
-    def _scroll_widget_into_view(self, widget: QWidget) -> None:
-        """Scroll the form so ``widget`` is visible above the keyboard."""
-        # Defensive: the widget may have been destroyed between the
-        # 300 ms timer schedule and now (e.g., language switch).
-        viewport = self._scroll_area.viewport()
-        if viewport is None or not widget.isVisible():
-            return
-
-        # QGuiApplication.inputMethod() is nullable per the stubs;
-        # the kiosk's Qt runtime always has one but mypy --strict
-        # wants the guard.
-        input_method = QGuiApplication.inputMethod()
-        if input_method is None:
-            return
-        keyboard_rect = input_method.keyboardRectangle()
-        keyboard_height = int(keyboard_rect.height())
-        # If Qt hasn't reported a rectangle yet but the IME claims to
-        # be visible, fall back to a sensible default — the Qt
-        # virtual keyboard on the kiosk's 1080p panel is ~400 px tall.
-        if keyboard_height == 0 and input_method.isVisible():
-            keyboard_height = 400
-
-        widget_top = widget.mapTo(viewport, QPoint(0, 0)).y()
-        widget_bottom = widget_top + widget.height()
-        visible_height = viewport.height() - keyboard_height
-
-        if widget_bottom > visible_height:
-            # 50 px padding above the keyboard edge so the field
-            # isn't flush against it.
-            delta = widget_bottom - visible_height + 50
-            scroll_bar = self._scroll_area.verticalScrollBar()
-            if scroll_bar is not None:
-                scroll_bar.setValue(scroll_bar.value() + delta)
 
     def _on_submit_clicked(self) -> None:
         # `on_enter` set self._language; validation errors render in
