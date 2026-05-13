@@ -34,9 +34,11 @@ Decisions pinned by code:
 
 from __future__ import annotations
 
+import struct
 import time
 from collections import deque
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
@@ -191,6 +193,66 @@ def extract_mass_kg(entity_values: Mapping[Any, Any]) -> float | None:
                 return float(native)
             except (TypeError, ValueError):  # pragma: no cover - defensive
                 return None
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic — S200 advert timestamp re-parse (no behavior change)
+# ---------------------------------------------------------------------------
+#
+# Used to determine what kind of timestamp the scale emits before
+# writing the session-floor fix per
+# docs/audits/2026-05-13-scale-stale-readings-audit.md. The xiaomi-ble
+# parser at obj4e16 unpacks `(profile_id, weight, timestamp)` from the
+# 9-byte object body but discards the timestamp. We re-scan the raw
+# service_data for the obj4e16 marker (object id 0x4E16, little-endian
+# bytes 0x16 0x4E) and read the 4-byte timestamp field directly so a
+# bench operator can correlate values across rebroadcasts.
+#
+# Caveat: the S200 typically advertises with MiBeacon encryption (the
+# kiosk loads a per-scale bindkey to decrypt). For encrypted adverts
+# the obj4e16 TLV will not appear in the cleartext bytes and this
+# helper returns None — that's still a useful diagnostic ("the
+# library can decrypt; we cannot from raw bytes"), and the next
+# iteration will pivot to a different surfacing approach.
+
+
+_OBJ_ID_S200 = 0x4E16
+
+
+def _extract_s200_advert_timestamp(
+    service_data: Mapping[str, bytes],
+) -> int | None:
+    """Scan raw service_data for the obj4e16 timestamp field.
+
+    Walks each service_data payload looking for the obj4e16 marker
+    (little-endian object id 0x4E16) followed by a 9-byte body whose
+    layout is ``<BII>`` per xiaomi-ble's ``obj4e16`` parser.
+    Returns the unsigned 32-bit timestamp on a successful match,
+    ``None`` otherwise (encrypted advert, marker not present,
+    truncated, etc.).
+
+    Diagnostic-only; no behavior change. See
+    ``docs/audits/2026-05-13-scale-stale-readings-audit.md``.
+    """
+    try:
+        for _uuid, payload in service_data.items():
+            if len(payload) < 12:
+                continue
+            i = 0
+            # Last viable start position: header (2) + length (1) +
+            # body (9) = 12 bytes.
+            while i <= len(payload) - 12:
+                obj_id = int.from_bytes(payload[i : i + 2], "little")
+                if obj_id == _OBJ_ID_S200:
+                    body_len = payload[i + 2]
+                    if body_len == 9:
+                        body = payload[i + 3 : i + 3 + 9]
+                        _profile_id, _data, ts = struct.unpack("<BII", body)
+                        return int(ts)
+                i += 1
+    except Exception:  # pragma: no cover - defensive scan
+        return None
     return None
 
 
@@ -421,6 +483,25 @@ class XiaomiScaleSensor(Sensor):
         if self._device_data is None:
             return
         update = self._device_data.update(service_info)
+
+        # Diagnostic-only (no behavior change): re-extract the S200
+        # advert timestamp from the raw service_data and log it
+        # alongside the kiosk's wall-clock receipt time so a bench
+        # operator can determine the timestamp's reference (Unix
+        # epoch, seconds-since-power-on, sequence counter, ...) before
+        # the session-floor fix is implemented. Audit:
+        # docs/audits/2026-05-13-scale-stale-readings-audit.md.
+        advert_ts = _extract_s200_advert_timestamp(advertisement_data.service_data)
+        diag_mass = extract_mass_kg(update.entity_values)
+        self._logger.info(
+            "xiaomi_scale.advert_diagnostic",
+            advert_timestamp=advert_ts,
+            kiosk_receipt_time=time.time(),
+            kiosk_receipt_iso=datetime.now(timezone.utc).isoformat(),
+            mass_kg=diag_mass,
+            mac=ble_device.address,
+        )
+
         await self._on_sensor_update(update.entity_values)
 
     async def _on_sensor_update(self, entity_values: Mapping[Any, Any]) -> None:
