@@ -20,13 +20,24 @@ This README is for the kiosk team. Project-wide context lives in the
 - **For BLE on Linux:** BlueZ (`bluez`, `bluez-tools`). Bleak talks to
   it. Mock mode does not need BlueZ.
 - **For the on-screen keyboard on the touchscreen kiosk** (production
-  deployment only): `qml-module-qtquick-virtualkeyboard` +
-  `qt6-virtualkeyboard-plugin`. Without these the `QT_IM_MODULE`
-  selector set in [`__main__.py`](src/ginhawa_kiosk/__main__.py)
-  resolves to nothing and a citizen with no hardware keyboard can't
-  fill in the register form. Not required for laptop / mock-mode
-  development. Install command lives in
-  [`docs/phase-0-plan.md`](../docs/phase-0-plan.md) §1.
+  deployment only):
+  - `qt6-virtualkeyboard-plugin` (system-installed; PyPI PyQt6 wheels
+    don't bundle the plugin).
+  - **X11 session, not Wayland.** Qt explicitly refuses to load the
+    client-side virtual keyboard under Wayland — the compositor's
+    `text-input-v3` protocol is supposed to negotiate an IME and
+    Pi OS Wayland ships no daemon that fulfills it. The systemd unit
+    sets `QT_QPA_PLATFORM=xcb` to force X11.
+  - `QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt6/plugins` so Qt
+    looks at the apt-installed plugin directory in addition to
+    PyQt6's bundled (incomplete) one.
+    Without all three the `QT_IM_MODULE=qtvirtualkeyboard` selector set
+    by [`__main__.py`](src/ginhawa_kiosk/__main__.py) resolves to
+    nothing and a citizen with no hardware keyboard can't fill in the
+    register form. Not required for laptop / mock-mode development.
+    Full install + systemd configuration in
+    [`docs/phase-0-plan.md`](../docs/phase-0-plan.md) §1 (system
+    packages) and §8 (systemd unit env vars).
 
 ## Install
 

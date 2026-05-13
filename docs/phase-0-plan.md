@@ -451,6 +451,15 @@ Wants=network-online.target
 User=ginhawa
 Group=ginhawa
 EnvironmentFile=/etc/ginhawa/kiosk.env
+# Qt input + display backend. The kiosk's QLineEdit / QDateEdit etc.
+# need an on-screen keyboard for citizens without a hardware keyboard.
+# Wayland's text-input-v3 protocol refuses Qt's client-side virtual
+# keyboard plugin (see ADR / kiosk README); we force X11 and point
+# Qt at the system's apt-installed plugin directory because PyQt6's
+# bundled Qt wheel does NOT ship the virtual-keyboard plugin.
+Environment="QT_QPA_PLATFORM=xcb"
+Environment="QT_IM_MODULE=qtvirtualkeyboard"  # pragma: allowlist secret
+Environment="QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt6/plugins"  # pragma: allowlist secret
 WorkingDirectory=/opt/ginhawa/src/kiosk
 ExecStart=/home/ginhawa/.local/bin/uv run python -m ginhawa_kiosk
 Restart=on-failure
@@ -465,6 +474,65 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now ginhawa-kiosk
 ```
+
+### Virtual keyboard setup for touch deployments
+
+The kiosk relies on Qt's built-in virtual keyboard plugin for citizen
+registration (the register form's `QLineEdit` / `QDateEdit` widgets
+have nowhere to receive input otherwise). Three things must line up:
+
+1. **System packages.** Installed by §1 above:
+
+   ```bash
+   sudo apt install -y qt6-virtualkeyboard-plugin \
+                       qml6-module-qtquick-virtualkeyboard
+   ```
+
+   Verify the plugin landed:
+
+   ```bash
+   ls /usr/lib/aarch64-linux-gnu/qt6/plugins/platforminputcontexts/
+   # → libqtvirtualkeyboardplugin.so
+   ```
+
+2. **X11 session, not Wayland.** Pi OS trixie defaults to Wayland.
+   Qt refuses to load the client-side virtual keyboard plugin under
+   Wayland — the compositor's `text-input-v3` protocol is supposed
+   to negotiate an IME (and Pi OS ships no daemon that does). The
+   `Environment="QT_QPA_PLATFORM=xcb"` line in the systemd unit
+   (§8 above) forces X11 for the kiosk's Qt session, sidestepping
+   the Wayland IME negotiation entirely.
+
+3. **PyQt6's bundled Qt must see the system plugin.** PyQt6 wheels
+   from PyPI ship their own private `Qt6/plugins/` directory inside
+   the venv and that directory does NOT include the virtual keyboard
+   plugin. `Environment="QT_PLUGIN_PATH=/usr/lib/aarch64-linux-gnu/qt6/plugins"` <!-- pragma: allowlist secret -->
+   in the systemd unit adds the apt-installed system plugins to the
+   search path. The Qt versions must be ABI-compatible — `apt list
+--installed | grep qt6-virtualkeyboard` and the version reported
+   by `uv run python -c "from PyQt6.QtCore import QT_VERSION_STR;
+print(QT_VERSION_STR)"` should share the same major.minor.
+
+After applying the unit changes:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ginhawa-kiosk
+
+# Verify all three env vars are active:
+sudo systemctl show ginhawa-kiosk --property=Environment | tr ' ' '\n' \
+  | grep -E "QT_QPA_PLATFORM|QT_IM_MODULE|QT_PLUGIN_PATH"
+# Should print all three.
+
+# Watch for plugin load / failure:
+sudo journalctl -u ginhawa-kiosk -f \
+  | grep -iE "qpa|plugin|virtualkeyboard"
+```
+
+Bench-test by tapping an unregistered RFID card and confirming the
+keyboard slides up when the Name field receives focus. If it
+doesn't, set `QT_DEBUG_PLUGINS=1` in the unit and check the journal
+for the plugin loader's diagnostic.
 
 ### 9. Verification
 

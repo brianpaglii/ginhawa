@@ -37,15 +37,34 @@ from __future__ import annotations
 
 import os
 
-# QT_IM_MODULE selects Qt's input-method plugin. Must be set BEFORE
-# any Qt import (qasync pulls in PyQt6 transitively); once Qt's GUI
-# plugin loader has run the variable is read-only and the on-screen
-# keyboard plugin (shipped by the qt6-virtualkeyboard-plugin apt
-# package on the Pi) never loads, so QLineEdit / QSpinBox / QDateEdit
-# never get a popup keyboard and citizen registration on a kiosk
-# without a hardware keyboard is impossible. See docs/phase-0-plan.md
-# §1 for the apt-install requirement.
-os.environ["QT_IM_MODULE"] = "qtvirtualkeyboard"
+# Qt input + display backend selection. Both MUST be set BEFORE any
+# Qt import (qasync pulls in PyQt6 transitively); once Qt's GUI
+# plugin loader has run these variables are read-only.
+#
+# QT_IM_MODULE = qtvirtualkeyboard
+#   Loads the on-screen keyboard input-method plugin (apt package
+#   qt6-virtualkeyboard-plugin on the Pi). Without it QLineEdit /
+#   QSpinBox / QDateEdit don't get a popup keyboard and citizen
+#   registration on a kiosk without a hardware keyboard is
+#   impossible.
+#
+# QT_QPA_PLATFORM = xcb
+#   Forces X11. Wayland's compositor-side text-input-v3 protocol
+#   refuses to load Qt's client-side virtual keyboard (the Qt
+#   diagnostic literally says "qtvirtualkeyboard currently is not
+#   supported at client-side"); the Wayland alternative is the
+#   Squeekboard compositor-side daemon which is a much bigger
+#   plumbing change. X11 lets Qt's own plugin take over.
+#
+# Both use ``setdefault`` so a systemd unit's ``Environment=`` lines
+# take precedence — that's where the deployment configures them in
+# production. The values here are the fallback for manual
+# ``uv run python -m ginhawa_kiosk`` invocation during dev.
+#
+# See docs/phase-0-plan.md "Virtual keyboard setup" for the apt
+# install + systemd configuration.
+os.environ.setdefault("QT_IM_MODULE", "qtvirtualkeyboard")
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 import asyncio  # noqa: E402
 import sys  # noqa: E402
