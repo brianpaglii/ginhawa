@@ -290,7 +290,9 @@ async def _bp_trigger_loop(bus: EventBus, stdout: IO[str], stop: asyncio.Event) 
             file=stdout,
             flush=True,
         )
-        await bus.publish(BpMeasurementRequested())
+        await bus.publish(
+            BpMeasurementRequested(session_floor=datetime.now(timezone.utc).isoformat())
+        )
 
 
 # ---------------------------------------------------------------------------

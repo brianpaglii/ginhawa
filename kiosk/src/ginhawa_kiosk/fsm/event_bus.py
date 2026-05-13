@@ -166,7 +166,20 @@ class BpMeasurementRequested(Event):
     """Fired by the FSM when entering MEASURING_VITALS to ask the
     Omron BP cuff sensor to take a reading. The sensor connects,
     awaits one notification, parses, publishes MeasurementProposed
-    events for systolic / diastolic / pulse, then disconnects."""
+    events for systolic / diastolic / pulse, then disconnects.
+
+    ``session_floor`` is the kiosk's UTC ISO-8601 timestamp at the
+    moment of request emission. The cuff is store-and-forward and
+    re-delivers its last measurement on every reconnect; without a
+    floor a stored reading from the previous session can pass the
+    absolute 180 s freshness gate when sessions are back-to-back
+    (audit: ``docs/audits/2026-05-13-bp-stale-readings-audit.md``;
+    ADR-0020). The BP handler uses it as a lower bound: any reading
+    whose cuff-side ``taken_at`` is older than ``session_floor``
+    minus a small skew tolerance is treated as stale.
+    """
+
+    session_floor: str
 
 
 class BpMeasurementRequestCancelled(Event):

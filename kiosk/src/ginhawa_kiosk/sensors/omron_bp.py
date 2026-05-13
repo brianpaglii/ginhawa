@@ -47,7 +47,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -98,6 +98,15 @@ _BP_LOG_PROGRESS_EVERY_N = 5
 # prompted (via the GUI's re-enabled Connect button) to take a
 # fresh measurement and tap Connect again.
 _BP_FRESHNESS_WINDOW_S = 180.0  # 3 minutes
+
+# Skew tolerance for cuff-RTC drift applied symmetrically against the
+# session floor. The HEM-7155T's internal RTC is not NTP-synced and
+# drifts a few seconds per day; without tolerance a reading taken
+# moments before the kiosk emitted BpMeasurementRequested would be
+# rejected as "before the session started." 10 s comfortably covers
+# observed drift and the gap between citizen pressing START and the
+# kiosk's MEASURING_VITALS entry stamp (ADR-0020).
+_BP_SESSION_FLOOR_SKEW_S = 10.0
 
 # After connect, the cuff dumps stored readings rapid-fire (typically
 # in 1-2 seconds), then goes silent until the user presses START. We
@@ -201,26 +210,40 @@ def _is_fresh(
     *,
     now: Callable[[], datetime] | None = None,
     window_s: float = _BP_FRESHNESS_WINDOW_S,
+    session_floor: datetime | None = None,
+    skew_s: float = _BP_SESSION_FLOOR_SKEW_S,
 ) -> bool:
-    """Decide whether a SIG-payload timestamp is recent enough to publish.
+    """Decide whether a SIG-payload timestamp is fresh for the request.
+
+    Two gates; both must pass.
+
+    1. **Absolute window** (existing): ``abs(now - taken_at) <= window_s``.
+       Symmetric to tolerate small RTC drift between the cuff and the
+       Pi. The wall-clock-vs-timezone mismatch the cuff used to
+       introduce — encoding local time in a SIG field that carries no
+       tz metadata — is corrected upstream in :func:`_parse_timestamp`
+       by tagging the value with the host's local timezone, so by the
+       time we get here both ``now`` and ``taken_at`` reduce to the
+       same UTC instant.
+    2. **Session floor** (new, ADR-0020): ``taken_at >= session_floor
+       - skew_s`` when a floor is supplied. The cuff is store-and-
+       forward — on every reconnect it re-delivers its last stored
+       reading. Without the floor a session-1 reading taken 90 s ago
+       would pass the absolute window when session 2 connects 30 s
+       after session 1 ended, attributing the wrong BP triple to the
+       new citizen. The skew tolerance covers the small gap between
+       the citizen pressing START on the cuff and the kiosk stamping
+       its MEASURING_VITALS entry, plus any cuff-RTC drift.
+
+    ``session_floor=None`` (the default) preserves the legacy single-
+    gate behaviour and keeps tests that call ``_is_fresh(taken_at,
+    now=...)`` working unchanged.
 
     Returns ``False`` when the cuff didn't include a timestamp at
-    all — without it we can't distinguish a fresh measurement from
+    all — without it we cannot distinguish a fresh measurement from
     a months-old stored one, and the kiosk would rather drop the
     reading than misattribute someone else's BP to the active
     citizen.
-
-    Otherwise returns ``True`` iff
-    ``abs(now - taken_at) <= window_s``. The check is symmetric to
-    tolerate small clock drift between the cuff's RTC and the Pi
-    (the cuff's RTC is not network-synchronised; a few seconds of
-    skew either direction is normal and shouldn't drop a fresh
-    reading). The wall-clock-vs-timezone mismatch the cuff used to
-    introduce — encoding local time in a SIG field that carries no
-    tz metadata — is corrected upstream in :func:`_parse_timestamp`
-    by tagging the value with the host's local timezone, so by the
-    time we get here both ``now`` and ``taken_at`` reduce to the
-    same UTC instant.
 
     ``now`` is injectable for tests; defaults to UTC wall-clock.
     """
@@ -230,7 +253,17 @@ def _is_fresh(
     if taken_at.tzinfo is None:
         taken_at = taken_at.replace(tzinfo=timezone.utc)
     delta_s = abs((current - taken_at).total_seconds())
-    return delta_s <= window_s
+    if delta_s > window_s:
+        return False
+    if session_floor is not None:
+        floor_aware = (
+            session_floor
+            if session_floor.tzinfo is not None
+            else session_floor.replace(tzinfo=timezone.utc)
+        )
+        if taken_at < floor_aware - timedelta(seconds=skew_s):
+            return False
+    return True
 
 
 def _parse_timestamp(raw: bytes) -> datetime | None:
@@ -420,6 +453,13 @@ class OmronBpSensor(Sensor):
         # _handle_request so a previously-cancelled session doesn't
         # poison the next one.
         self._cancel_event = asyncio.Event()
+        # Session floor for the in-flight request. Set when
+        # _handle_request unpacks the BpMeasurementRequested event,
+        # cleared in the handler's finally so a leftover floor cannot
+        # bleed into the next session. None outside of an active
+        # request — the legacy _is_fresh(taken_at) signature is
+        # preserved when this is None.
+        self._session_floor: datetime | None = None
 
     async def start(self) -> None:  # pragma: no cover - hardware path
         if self._running:
@@ -468,7 +508,7 @@ class OmronBpSensor(Sensor):
         return row.value if row is not None else None
 
     async def _handle_request(  # pragma: no cover - hardware path
-        self, _event: BpMeasurementRequested
+        self, event: BpMeasurementRequested
     ) -> None:
         if not self._running or self._mac is None:
             return
@@ -488,30 +528,51 @@ class OmronBpSensor(Sensor):
             # would bail immediately. Tests that flip the flag
             # explicitly after this point continue to work.
             self._cancel_event.clear()
-            self._logger.info("omron_bp.request_started", mac=self._mac)
-            # Acquire the BLE adapter exclusively for the duration of
-            # the directed connect. The Xiaomi scale's continuous
-            # scanner pauses on entry and resumes on exit (success or
-            # failure). When ble_lock is None — typical of unit tests
-            # that inject a client_factory — fall through without
-            # serialisation.
+            self._session_floor = self._parse_session_floor(event.session_floor)
             try:
-                if self._ble_lock is not None:
-                    async with self._ble_lock.exclusive():
-                        reading = await self._read_notifications_until_fresh(self._mac)
-                else:
-                    reading = await self._read_notifications_until_fresh(self._mac)
-            except Exception as exc:
-                self._logger.warning(
-                    "omron_bp.connect_failed", mac=self._mac, error=str(exc)
+                self._logger.info(
+                    "omron_bp.request_started",
+                    mac=self._mac,
+                    session_floor=self._session_floor.isoformat(),
                 )
-                return
-            if reading is None:
-                # Either cancelled (logged as cancelled_by_fsm_exit)
-                # or test-path single-shot drain timeout — either
-                # way the handler returns without publishing.
-                return
-            await self._publish_reading(reading)
+                # Acquire the BLE adapter exclusively for the duration
+                # of the directed connect. The Xiaomi scale's
+                # continuous scanner pauses on entry and resumes on
+                # exit (success or failure). When ble_lock is None —
+                # typical of unit tests that inject a client_factory
+                # — fall through without serialisation.
+                try:
+                    if self._ble_lock is not None:
+                        async with self._ble_lock.exclusive():
+                            reading = await self._read_notifications_until_fresh(
+                                self._mac
+                            )
+                    else:
+                        reading = await self._read_notifications_until_fresh(self._mac)
+                except Exception as exc:
+                    self._logger.warning(
+                        "omron_bp.connect_failed", mac=self._mac, error=str(exc)
+                    )
+                    return
+                if reading is None:
+                    # Either cancelled (logged as cancelled_by_fsm_exit)
+                    # or test-path single-shot drain timeout — either
+                    # way the handler returns without publishing.
+                    return
+                await self._publish_reading(reading)
+            finally:
+                # Clear the floor in finally so a return / exception
+                # leaves the sensor with no leftover state to bleed
+                # into the next session.
+                self._session_floor = None
+
+    @staticmethod
+    def _parse_session_floor(iso_str: str) -> datetime:
+        """Parse the event's ISO 8601 floor, defaulting tz to UTC."""
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
 
     async def _read_notifications_until_fresh(self, mac: str) -> BpReading | None:
         """Connect, subscribe, drain — retry indefinitely until fresh or cancel.
@@ -740,13 +801,29 @@ class OmronBpSensor(Sensor):
                     bytes=payload.hex(),
                 )
                 continue
-            if not _is_fresh(reading.taken_at):
+            if not _is_fresh(reading.taken_at, session_floor=self._session_floor):
                 stale_count += 1
                 self._logger.info(
                     "omron_bp.stored_reading_drained",
                     mac=mac,
                     taken_at=reading.taken_at.isoformat() if reading.taken_at else None,
                     freshness_window_s=_BP_FRESHNESS_WINDOW_S,
+                    session_floor=(
+                        self._session_floor.isoformat()
+                        if self._session_floor is not None
+                        else None
+                    ),
+                    # Negative = reading predates the floor (most
+                    # common stale shape: stored reading from the
+                    # previous session). Positive = reading is after
+                    # the floor but failed the absolute window
+                    # (cuff-RTC gross skew).
+                    delta_to_floor_s=(
+                        (reading.taken_at - self._session_floor).total_seconds()
+                        if reading.taken_at is not None
+                        and self._session_floor is not None
+                        else None
+                    ),
                 )
                 continue
             self._logger.info(
@@ -754,6 +831,11 @@ class OmronBpSensor(Sensor):
                 mac=mac,
                 has_pulse=reading.pulse_bpm is not None,
                 taken_at=reading.taken_at.isoformat() if reading.taken_at else None,
+                session_floor=(
+                    self._session_floor.isoformat()
+                    if self._session_floor is not None
+                    else None
+                ),
             )
             return reading
 

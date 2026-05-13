@@ -561,7 +561,18 @@ class KioskMainWindow(QMainWindow):
             # previously demanded a user-gated trigger is now
             # serialised by BleAdapterLock — see sensors/ble_lock.py.
             _log.info("main_window.bp_request_auto_fired")
-            self._publish_async(self._bus.publish(BpMeasurementRequested()))
+            # Stamp the session floor at request emission. The BP
+            # handler uses this as a lower bound when deciding whether
+            # the cuff's payload timestamp is fresh — anything older
+            # than now is a stored reading from a prior session
+            # (ADR-0020).
+            self._publish_async(
+                self._bus.publish(
+                    BpMeasurementRequested(
+                        session_floor=datetime.now(timezone.utc).isoformat()
+                    )
+                )
+            )
         elif state == State.MEASURING_ANTHRO:
             self._seed_offline_sensor_placeholders(state)
             # Reset the Xiaomi scale's stability gate immediately
