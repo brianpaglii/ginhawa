@@ -77,6 +77,12 @@ class _GuiStrings:
     path_choice_anthropometric: str
     path_choice_full: str
     path_choice_help: str
+    # Short card titles (icon-paired, paired with the longer
+    # path_choice_* descriptions inside each service card).
+    path_choice_vitals_title: str
+    path_choice_anthropometric_title: str
+    path_choice_full_title: str
+    path_choice_start_button: str
 
     # MeasuringVitalsScreen
     measuring_vitals_title: str
@@ -163,6 +169,10 @@ _EN = _GuiStrings(
     path_choice_anthropometric="Body measurements (height, weight)",
     path_choice_full="Full check (vitals + body measurements)",
     path_choice_help="Tap one option to begin.",
+    path_choice_vitals_title="Vitals",
+    path_choice_anthropometric_title="Body",
+    path_choice_full_title="Full Check",
+    path_choice_start_button="Start",
     measuring_vitals_title="Vitals",
     measuring_vitals_bp_instruction=(
         "1. Place the cuff on your upper arm.\n"
@@ -262,6 +272,10 @@ _TL = _GuiStrings(
     path_choice_anthropometric="Sukat ng katawan (taas, timbang)",
     path_choice_full="Buong tsek (vital signs + sukat ng katawan)",
     path_choice_help="I-tap ang isa para magsimula.",
+    path_choice_vitals_title="Vital Signs",
+    path_choice_anthropometric_title="Sukat ng Katawan",
+    path_choice_full_title="Buong Tsek",
+    path_choice_start_button="Magsimula",
     measuring_vitals_title="Vital signs",
     measuring_vitals_bp_instruction=(
         "1. Ilagay ang cuff sa iyong braso.\n"

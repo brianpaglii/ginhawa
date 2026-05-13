@@ -29,22 +29,18 @@ class ConsentScreen(BaseScreen):
 
         self._title = QLabel()
         self._title.setObjectName("consent_title")
-        self._title.setStyleSheet("font-size: 28px; font-weight: bold;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._body = QLabel()
         self._body.setObjectName("consent_body")
         self._body.setWordWrap(True)
-        self._body.setStyleSheet("font-size: 18px;")
 
         self._agree_button = QPushButton()
         self._agree_button.setObjectName("consent_agree_button")
-        self._agree_button.setStyleSheet("font-size: 22px; padding: 16px 32px;")
         self._agree_button.clicked.connect(self.consent_given.emit)
 
         self._disagree_button = QPushButton()
         self._disagree_button.setObjectName("consent_disagree_button")
-        self._disagree_button.setStyleSheet("font-size: 22px; padding: 16px 32px;")
         self._disagree_button.clicked.connect(self.consent_refused.emit)
 
         button_row = QHBoxLayout()

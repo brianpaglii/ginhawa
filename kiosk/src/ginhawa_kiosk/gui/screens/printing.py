@@ -22,13 +22,13 @@ class PrintingScreen(BaseScreen):
         self._title = QLabel()
         self._title.setObjectName("printing_title")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._title.setStyleSheet("font-size: 28px; font-weight: bold;")
 
         # Simple animated dots — keeping it cheap so a stuck printer
-        # query doesn't burn the CPU.
+        # query doesn't burn the CPU. The identifying_label style is
+        # reused to match the spinner sizing.
         self._spinner = QLabel("...")
+        self._spinner.setObjectName("identifying_label")
         self._spinner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._spinner.setStyleSheet("font-size: 48px;")
 
         layout = QVBoxLayout()
         layout.addStretch(1)

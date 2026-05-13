@@ -28,26 +28,26 @@ class LanguageSelectScreen(BaseScreen):
 
         layout = QVBoxLayout()
 
-        # Bilingual heading — both forms always visible.
+        # Bilingual heading — both forms always visible. The screenH2
+        # objectName lets the global stylesheet drive the font size.
         heading_en = QLabel(get_strings("en").language_select_title)
+        heading_en.setObjectName("screenH2")
         heading_en.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        heading_en.setStyleSheet("font-size: 32px; font-weight: bold;")
 
         heading_tl = QLabel(get_strings("tl").language_select_title)
+        heading_tl.setObjectName("screenH2")
         heading_tl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        heading_tl.setStyleSheet("font-size: 32px; font-weight: bold;")
 
-        # Buttons: English / Tagalog, equal weight.
+        # Buttons: English / Tagalog, equal weight. The QSS targets
+        # these objectNames with the giant-button treatment per spec.
         buttons_row = QHBoxLayout()
 
         en_button = QPushButton("English")
         en_button.setObjectName("language_button_en")
-        en_button.setStyleSheet("font-size: 28px; padding: 40px;")
         en_button.clicked.connect(lambda: self.language_chosen.emit("en"))
 
         tl_button = QPushButton("Tagalog")
         tl_button.setObjectName("language_button_tl")
-        tl_button.setStyleSheet("font-size: 28px; padding: 40px;")
         tl_button.clicked.connect(lambda: self.language_chosen.emit("tl"))
 
         buttons_row.addStretch(1)

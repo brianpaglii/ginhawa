@@ -50,6 +50,7 @@ from .db.models import Citizen, DeviceConfig
 from .db.session import create_engine_for_kiosk, make_session_factory
 from .fsm import EventBus, SessionFSM
 from .gui.main_window import KioskMainWindow
+from .gui.style_loader import build_stylesheet
 from .sensors import create_all_sensors
 from .services.printer import create_printer_service
 from .sync.client import CloudClient
@@ -90,6 +91,7 @@ def main() -> int:  # pragma: no cover - hardware-bound entry point
         return 2
 
     app = QApplication(sys.argv)
+    app.setStyleSheet(build_stylesheet())
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)
 

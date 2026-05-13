@@ -21,17 +21,14 @@ class EndScreen(QWidget):
         self._thank_en = QLabel(BILINGUAL_STRINGS.end_thank_you_en)
         self._thank_en.setObjectName("end_thank_en")
         self._thank_en.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._thank_en.setStyleSheet("font-size: 32px; font-weight: bold;")
 
         self._thank_tl = QLabel(BILINGUAL_STRINGS.end_thank_you_tl)
         self._thank_tl.setObjectName("end_thank_tl")
         self._thank_tl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._thank_tl.setStyleSheet("font-size: 32px; font-weight: bold;")
 
         self._countdown = QLabel()
         self._countdown.setObjectName("end_countdown")
         self._countdown.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._countdown.setStyleSheet("font-size: 18px;")
 
         layout = QVBoxLayout()
         layout.addStretch(1)

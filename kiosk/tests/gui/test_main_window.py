@@ -46,7 +46,7 @@ def main_window(
 
 
 def _current_object_name(window: KioskMainWindow) -> str:
-    return window.centralWidget().currentWidget().objectName()  # type: ignore[no-any-return,union-attr]
+    return window.stack.currentWidget().objectName()  # type: ignore[no-any-return,union-attr]
 
 
 # Verifies that for each FSM state the QStackedWidget shows the
@@ -120,7 +120,7 @@ def test_main_window_routes_cancel_to_aborted(
 
     # Emulate the citizen tapping Cancel on PathChoiceScreen — the
     # main window forwards the signal to fsm.cancel().
-    screen = main_window.centralWidget().currentWidget()  # type: ignore[union-attr]
+    screen = main_window.stack.currentWidget()  # type: ignore[union-attr]
     screen.cancel_requested.emit()
     assert _current_object_name(main_window) == "aborted_screen"
 
@@ -142,7 +142,7 @@ def test_main_window_routes_change_language_to_language_select(
     fsm.measurement_path_complete()
     assert _current_object_name(main_window) == "report_screen"
 
-    screen = main_window.centralWidget().currentWidget()  # type: ignore[union-attr]
+    screen = main_window.stack.currentWidget()  # type: ignore[union-attr]
     screen.change_language_requested.emit()
     assert _current_object_name(main_window) == "language_select_screen"
 
@@ -202,12 +202,8 @@ def test_main_window_filters_invalid_measurements_on_report(
     fsm.measurement_path_complete()
     assert _current_object_name(main_window) == "report_screen"
 
-    list_widget = (
-        main_window.centralWidget()
-        .currentWidget()
-        .findChild(  # type: ignore[union-attr]
-            QListWidget, "report_list"
-        )
+    list_widget = main_window.stack.currentWidget().findChild(  # type: ignore[union-attr]
+        QListWidget, "report_list"
     )
     assert list_widget is not None
     assert list_widget.count() == 1

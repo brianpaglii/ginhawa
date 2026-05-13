@@ -22,12 +22,10 @@ class ErrorScreen(QWidget):
         title_en = QLabel(BILINGUAL_STRINGS.error_title_en)
         title_en.setObjectName("error_title_en")
         title_en.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_en.setStyleSheet("font-size: 28px; font-weight: bold;")
 
         title_tl = QLabel(BILINGUAL_STRINGS.error_title_tl)
         title_tl.setObjectName("error_title_tl")
         title_tl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_tl.setStyleSheet("font-size: 28px; font-weight: bold;")
 
         message_en = QLabel(BILINGUAL_STRINGS.error_message_en)
         message_en.setObjectName("error_message_en")
@@ -42,7 +40,6 @@ class ErrorScreen(QWidget):
         self._diagnostic = QLabel()
         self._diagnostic.setObjectName("error_diagnostic")
         self._diagnostic.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._diagnostic.setStyleSheet("font-family: monospace; font-size: 16px;")
 
         layout = QVBoxLayout()
         layout.addStretch(1)

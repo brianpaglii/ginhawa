@@ -1,0 +1,524 @@
+/* GINHAWA kiosk stylesheet.
+   Token placeholders are substituted at load time by
+   style_loader.build_stylesheet via str.format. Selector blocks use
+   double braces so str.format leaves the CSS braces in place.
+ */
+
+/* Global defaults --------------------------------------------------- */
+
+QWidget {{
+    background-color: {background};
+    color: {text_primary};
+    font-family: {font_family};
+    font-size: {body_size}px;
+}}
+
+QMainWindow {{
+    background-color: {background};
+}}
+
+/* Branded header ---------------------------------------------------- */
+
+#brandedHeader {{
+    background-color: {primary};
+    color: {text_on_primary};
+    border-bottom: 2px solid {primary_dark};
+}}
+
+#brandedHeader QLabel {{
+    color: {text_on_primary};
+    background: transparent;
+}}
+
+#brandWordmark {{
+    color: {text_on_primary};
+    background: transparent;
+    font-size: {h2_size}px;
+    font-weight: 800;
+    letter-spacing: 4px;
+}}
+
+#brandTagline {{
+    color: {text_on_primary};
+    background: transparent;
+    font-size: {body_sm_size}px;
+    font-weight: 400;
+}}
+
+#headerScreenTitle {{
+    color: {text_on_primary};
+    background: transparent;
+    font-size: {h3_size}px;
+    font-weight: 600;
+}}
+
+#headerClock {{
+    color: {text_on_primary};
+    background: transparent;
+    font-size: {body_size}px;
+    font-weight: 500;
+}}
+
+#headerLanguage {{
+    color: {text_on_primary};
+    background: transparent;
+    font-size: {body_sm_size}px;
+    font-weight: 400;
+}}
+
+/* Branded footer ---------------------------------------------------- */
+
+#brandedFooter {{
+    background-color: {surface};
+    color: {text_secondary};
+    border-top: 1px solid {border};
+}}
+
+#brandedFooter QLabel {{
+    color: {text_secondary};
+    background: transparent;
+    font-size: {body_sm_size}px;
+}}
+
+#footerBarangay {{
+    color: {text_secondary};
+    background: transparent;
+    font-weight: 600;
+}}
+
+#footerVersion {{
+    color: {text_secondary};
+    background: transparent;
+}}
+
+#footerNetwork {{
+    color: {text_secondary};
+    background: transparent;
+    font-weight: 600;
+}}
+
+/* Primary button ---------------------------------------------------- */
+
+QPushButton#primaryButton {{
+    background-color: {primary};
+    color: {text_on_primary};
+    border: none;
+    border-radius: {btn_radius}px;
+    padding: 24px 48px;
+    font-size: {button_lg_size}px;
+    font-weight: 700;
+    min-width: {primary_button_min_width}px;
+    min-height: {primary_button_min_height}px;
+}}
+
+QPushButton#primaryButton:hover {{
+    background-color: {primary_dark};
+}}
+
+QPushButton#primaryButton:pressed {{
+    background-color: {primary_dark};
+    padding-top: 26px;
+    padding-bottom: 22px;
+}}
+
+QPushButton#primaryButton:disabled {{
+    background-color: {border};
+    color: {text_secondary};
+}}
+
+/* Secondary button -------------------------------------------------- */
+
+QPushButton#secondaryButton,
+QPushButton#cancel_button,
+QPushButton#change_language_button,
+QPushButton#consent_disagree_button,
+QPushButton#report_finish_without_printing_button {{
+    background-color: {background};
+    color: {primary};
+    border: 2px solid {primary};
+    border-radius: {btn_radius}px;
+    padding: 16px 32px;
+    font-size: {button_size}px;
+    font-weight: 600;
+    min-width: {secondary_button_min_width}px;
+    min-height: {secondary_button_min_height}px;
+}}
+
+QPushButton#secondaryButton:hover,
+QPushButton#cancel_button:hover,
+QPushButton#change_language_button:hover,
+QPushButton#consent_disagree_button:hover,
+QPushButton#report_finish_without_printing_button:hover {{
+    background-color: {overlay};
+    color: {primary_dark};
+    border-color: {primary_dark};
+}}
+
+QPushButton#secondaryButton:pressed,
+QPushButton#cancel_button:pressed,
+QPushButton#change_language_button:pressed,
+QPushButton#consent_disagree_button:pressed,
+QPushButton#report_finish_without_printing_button:pressed {{
+    background-color: {primary};
+    color: {text_on_primary};
+}}
+
+QPushButton#secondaryButton:disabled,
+QPushButton#cancel_button:disabled,
+QPushButton#change_language_button:disabled,
+QPushButton#consent_disagree_button:disabled,
+QPushButton#report_finish_without_printing_button:disabled {{
+    color: {text_secondary};
+    border-color: {border};
+}}
+
+/* Card -------------------------------------------------------------- */
+
+QFrame#sectionCard {{
+    background-color: {surface};
+    border: 1px solid {border};
+    border-radius: {card_radius}px;
+    padding: 24px;
+}}
+
+QLabel#cardTitle {{
+    background: transparent;
+    color: {text_primary};
+    font-size: {h3_size}px;
+    font-weight: 700;
+}}
+
+/* Measurement composite -------------------------------------------- */
+
+QLabel#measurementValue {{
+    background: transparent;
+    color: {primary};
+    font-size: {measurement_value_size}px;
+    font-weight: 800;
+}}
+
+QLabel#measurementValueInvalid {{
+    background: transparent;
+    color: {text_secondary};
+    font-size: {measurement_value_size}px;
+    font-weight: 800;
+}}
+
+QLabel#measurementUnit {{
+    background: transparent;
+    color: {text_secondary};
+    font-size: {measurement_unit_size}px;
+    font-weight: 600;
+}}
+
+QLabel#measurementLabel {{
+    background: transparent;
+    color: {text_secondary};
+    font-size: {measurement_label_size}px;
+    font-weight: 700;
+    letter-spacing: 2px;
+}}
+
+QLabel#statusBadgeValid {{
+    background-color: {success};
+    color: {text_on_primary};
+    border-radius: 12px;
+    padding: 4px 12px;
+    font-size: {body_sm_size}px;
+    font-weight: 600;
+}}
+
+QLabel#statusBadgeInvalid {{
+    background-color: {warning};
+    color: {text_on_primary};
+    border-radius: 12px;
+    padding: 4px 12px;
+    font-size: {body_sm_size}px;
+    font-weight: 600;
+}}
+
+/* Headings + body --------------------------------------------------- */
+
+QLabel#screenH1 {{
+    color: {text_primary};
+    background: transparent;
+    font-size: {h1_size}px;
+    font-weight: 800;
+    letter-spacing: 4px;
+}}
+
+QLabel#screenH2 {{
+    color: {text_primary};
+    background: transparent;
+    font-size: {h2_size}px;
+    font-weight: 700;
+}}
+
+QLabel#screenH3 {{
+    color: {text_primary};
+    background: transparent;
+    font-size: {h3_size}px;
+    font-weight: 600;
+}}
+
+QLabel#bodyLg {{
+    color: {text_primary};
+    background: transparent;
+    font-size: {body_lg_size}px;
+    font-weight: 400;
+}}
+
+QLabel#body {{
+    color: {text_primary};
+    background: transparent;
+    font-size: {body_size}px;
+    font-weight: 400;
+}}
+
+QLabel#bodyMuted {{
+    color: {text_secondary};
+    background: transparent;
+    font-size: {body_sm_size}px;
+    font-weight: 400;
+}}
+
+/* Legacy per-screen objectName styling (assigns body/heading scale
+   without touching the existing find-by-name tests that already
+   query these objectNames). */
+
+QLabel#idle_prompt_en,
+QLabel#idle_prompt_tl,
+QLabel#end_thank_en,
+QLabel#end_thank_tl,
+QLabel#aborted_title_en,
+QLabel#aborted_title_tl,
+QLabel#error_title_en,
+QLabel#error_title_tl {{
+    color: {text_primary};
+    background: transparent;
+    font-size: {body_lg_size}px;
+    font-weight: 600;
+}}
+
+QLabel#aborted_message_en,
+QLabel#aborted_message_tl,
+QLabel#error_message_en,
+QLabel#error_message_tl,
+QLabel#end_countdown {{
+    color: {text_secondary};
+    background: transparent;
+    font-size: {body_size}px;
+}}
+
+QLabel#identifying_label {{
+    color: {text_secondary};
+    background: transparent;
+    font-size: {h2_size}px;
+}}
+
+QLabel#consent_title,
+QLabel#path_choice_title,
+QLabel#register_title,
+QLabel#report_title,
+QLabel#printing_title,
+QLabel#measuring_vitals_title,
+QLabel#measuring_anthro_title {{
+    color: {text_primary};
+    background: transparent;
+    font-size: {h3_size}px;
+    font-weight: 700;
+}}
+
+QLabel#consent_body,
+QLabel#register_intro,
+QLabel#measuring_vitals_bp_instruction,
+QLabel#measuring_vitals_pulse_instruction,
+QLabel#measuring_anthro_height_instruction,
+QLabel#measuring_anthro_weight_instruction,
+QLabel#measuring_anthro_temperature_instruction {{
+    color: {text_primary};
+    background: transparent;
+    font-size: {body_size}px;
+}}
+
+QLabel#path_choice_help,
+QLabel#measuring_vitals_status,
+QLabel#measuring_vitals_capturing,
+QLabel#measuring_anthro_capturing,
+QLabel#report_no_measurements,
+QLabel#report_printer_unavailable {{
+    color: {text_secondary};
+    background: transparent;
+    font-size: {body_sm_size}px;
+}}
+
+QLabel#register_error_label {{
+    color: {warning};
+    background: transparent;
+    font-size: {body_sm_size}px;
+    font-weight: 600;
+}}
+
+QLabel#error_diagnostic {{
+    color: {text_secondary};
+    background: transparent;
+    font-family: "Courier New", monospace;
+    font-size: {body_sm_size}px;
+}}
+
+QPushButton#consent_agree_button,
+QPushButton#report_print_button {{
+    background-color: {primary};
+    color: {text_on_primary};
+    border: none;
+    border-radius: {btn_radius}px;
+    padding: 20px 40px;
+    font-size: {button_size}px;
+    font-weight: 700;
+    min-height: 72px;
+}}
+
+QPushButton#consent_agree_button:hover,
+QPushButton#report_print_button:hover {{
+    background-color: {primary_dark};
+}}
+
+QPushButton#consent_agree_button:disabled,
+QPushButton#report_print_button:disabled {{
+    background-color: {border};
+    color: {text_secondary};
+}}
+
+QPushButton#language_button_en,
+QPushButton#language_button_tl {{
+    background-color: {primary};
+    color: {text_on_primary};
+    border: none;
+    border-radius: {btn_radius}px;
+    padding: 60px 80px;
+    font-size: {button_lg_size}px;
+    font-weight: 700;
+    min-width: 500px;
+    min-height: 280px;
+}}
+
+QPushButton#language_button_en:hover,
+QPushButton#language_button_tl:hover {{
+    background-color: {primary_dark};
+}}
+
+QPushButton#path_button_vitals,
+QPushButton#path_button_anthropometric,
+QPushButton#path_button_full {{
+    background-color: {primary};
+    color: {text_on_primary};
+    border: none;
+    border-radius: {btn_radius}px;
+    padding: 32px 48px;
+    font-size: {button_size}px;
+    font-weight: 700;
+    min-height: 100px;
+}}
+
+QPushButton#path_button_vitals:hover,
+QPushButton#path_button_anthropometric:hover,
+QPushButton#path_button_full:hover {{
+    background-color: {primary_dark};
+}}
+
+QPushButton#register_submit_button {{
+    background-color: {primary};
+    color: {text_on_primary};
+    border: none;
+    border-radius: {btn_radius}px;
+    padding: 16px 40px;
+    font-size: {button_size}px;
+    font-weight: 700;
+    min-height: 64px;
+}}
+
+QPushButton#register_submit_button:hover {{
+    background-color: {primary_dark};
+}}
+
+/* Input fields ------------------------------------------------------ */
+
+QLineEdit, QSpinBox, QDateEdit, QComboBox {{
+    background-color: {background};
+    color: {text_primary};
+    border: 2px solid {border};
+    border-radius: {btn_radius}px;
+    padding: 12px 16px;
+    font-size: {body_size}px;
+    min-height: 48px;
+}}
+
+QLineEdit:focus, QSpinBox:focus, QDateEdit:focus, QComboBox:focus {{
+    border-color: {primary};
+}}
+
+QLineEdit:disabled, QSpinBox:disabled, QDateEdit:disabled, QComboBox:disabled {{
+    background-color: {surface};
+    color: {text_secondary};
+    border-color: {border};
+}}
+
+QRadioButton {{
+    background: transparent;
+    color: {text_primary};
+    font-size: {body_size}px;
+    spacing: 12px;
+    padding: 8px;
+}}
+
+QRadioButton::indicator {{
+    width: 28px;
+    height: 28px;
+}}
+
+/* Generic QPushButton (when not primary/secondary) gets the
+   secondary look so legacy buttons remain usable while we migrate. */
+QPushButton {{
+    background-color: {background};
+    color: {primary};
+    border: 2px solid {primary};
+    border-radius: {btn_radius}px;
+    padding: 12px 24px;
+    font-size: {body_size}px;
+    font-weight: 600;
+}}
+
+QPushButton:hover {{
+    background-color: {overlay};
+}}
+
+QPushButton:pressed {{
+    background-color: {primary};
+    color: {text_on_primary};
+}}
+
+QPushButton:disabled {{
+    color: {text_secondary};
+    border-color: {border};
+}}
+
+/* List widgets used on measuring + report screens ------------------- */
+
+QListWidget {{
+    background-color: {background};
+    color: {text_primary};
+    border: 1px solid {border};
+    border-radius: {card_radius}px;
+    font-size: {body_size}px;
+    padding: 8px;
+}}
+
+QListWidget::item {{
+    padding: 12px;
+    border-bottom: 1px solid {border};
+}}
+
+QListWidget::item:selected {{
+    background-color: {overlay};
+    color: {text_primary};
+}}

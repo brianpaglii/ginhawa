@@ -61,7 +61,6 @@ class RegisterFormScreen(BaseScreen):
         # Heading + intro
         self._title = QLabel()
         self._title.setObjectName("register_title")
-        self._title.setStyleSheet("font-size: 28px; font-weight: bold;")
         self._intro = QLabel()
         self._intro.setObjectName("register_intro")
         self._intro.setWordWrap(True)
@@ -94,7 +93,6 @@ class RegisterFormScreen(BaseScreen):
         # Validation banner
         self._error_label = QLabel()
         self._error_label.setObjectName("register_error_label")
-        self._error_label.setStyleSheet("color: #b00020;")
         self._error_label.setWordWrap(True)
         self._error_label.setVisible(False)
 

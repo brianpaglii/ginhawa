@@ -19,9 +19,16 @@ session via the "Change language" button.
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QSpacerItem, QSizePolicy, QWidget
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QSizePolicy,
+    QSpacerItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..strings import Language, get_strings
+from ..widgets import SecondaryButton
 
 
 class BaseScreen(QWidget):
@@ -42,14 +49,21 @@ class BaseScreen(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self._cancel_button: QPushButton | None = None
-        self._change_language_button: QPushButton | None = None
+        self._cancel_button: SecondaryButton | None = None
+        self._change_language_button: SecondaryButton | None = None
         # The currently rendered language, set in on_enter. Kept as
         # an attribute so subclasses don't have to re-thread it
         # through their internal callbacks (e.g., a Submit click in
         # REGISTER_FORM needs to render validation errors in the
         # active language).
         self._language: Language = "en"
+        # Optional content slot that screens may populate via
+        # :pyattr:`content_layout`. The main window now owns the
+        # outer chrome (header + footer), so screens build only
+        # their per-state content into this vertical layout.
+        # Screens that don't use it construct their own layouts as
+        # before.
+        self.content_layout: QVBoxLayout = QVBoxLayout()
 
     # ------------------------------------------------------------------
     # Hooks the main window calls
@@ -68,11 +82,18 @@ class BaseScreen(QWidget):
 
     def _build_chrome_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        cancel = QPushButton()
+        # Both chrome buttons are SecondaryButtons so the global QSS
+        # styles them. We override the objectName afterwards so the
+        # existing find-by-name tests keep working — Qt allows one
+        # objectName per widget; we trade the QSS selector for the
+        # legacy name and accept the secondary visual treatment via
+        # widget class only on the matching cancel_button /
+        # change_language_button selectors below in styles.qss.
+        cancel = SecondaryButton()
         cancel.setObjectName("cancel_button")
         cancel.clicked.connect(self.cancel_requested.emit)
 
-        change_lang = QPushButton()
+        change_lang = SecondaryButton()
         change_lang.setObjectName("change_language_button")
         change_lang.clicked.connect(self.change_language_requested.emit)
 

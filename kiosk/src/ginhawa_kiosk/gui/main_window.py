@@ -31,7 +31,7 @@ from typing import Any
 
 import structlog
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QMainWindow, QStackedWidget
+from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QVBoxLayout, QWidget
 from sqlalchemy.orm import Session as SAOrmSession
 
 from ..db.models import Citizen, Measurement
@@ -51,6 +51,7 @@ from ..sensors.base import Sensor
 from ..services.audit import record_audit
 from ..services.printer import PrinterService, PrintResult
 from ..services.validation import validate_measurement
+from .widgets import BrandedFooter, BrandedHeader
 from .screens import (
     AbortedScreen,
     BaseScreen,
@@ -169,6 +170,25 @@ _TYPE_TO_UNIT: dict[str, str] = {
 # can tell the row came from the FSM, not a real device.
 _OFFLINE_SOURCE_DEVICE = "(offline)"
 _OFFLINE_VALIDATION_NOTES = "sensor_offline"
+
+
+# Per-state bilingual title rendered in the BrandedHeader. Empty
+# string for IDLE because the splash already shows the wordmark.
+_STATE_HEADER_TITLES: dict[str, str] = {
+    State.IDLE: "",
+    State.IDENTIFYING: "Identifying / Tinutukoy ka...",
+    State.LANGUAGE_SELECT: "Choose Language / Pumili ng Wika",
+    State.CONSENT: "Consent / Pahintulot",
+    State.REGISTER_FORM: "Register / Magparehistro",
+    State.PATH_CHOICE: "Choose Service / Pumili ng Serbisyo",
+    State.MEASURING_VITALS: "Measuring Vitals / Sinusukat ang Vitals",
+    State.MEASURING_ANTHRO: "Measuring Body / Sinusukat ang Katawan",
+    State.REPORT: "Your Results / Ang Iyong Resulta",
+    State.PRINTING: "Printing / Nagpi-print",
+    State.END: "Thank You / Salamat",
+    State.ABORTED: "Cancelled / Kanselado",
+    State.ERROR: "Error / May Problema",
+}
 
 
 CitizenLookup = Callable[[str], Awaitable[Citizen | None]]
@@ -294,7 +314,24 @@ class KioskMainWindow(QMainWindow):
         self._stack = QStackedWidget()
         for screen in self._screens.values():
             self._stack.addWidget(screen)
-        self.setCentralWidget(self._stack)
+
+        # Wrap the stack in a vertical layout flanked by the GINHAWA
+        # branded header (top) and footer (bottom). The central widget
+        # is a plain QWidget container; tests reach into the
+        # QStackedWidget via :pyattr:`stack`.
+        self._header = BrandedHeader()
+        self._footer = BrandedFooter()
+        if deployment_barangay:
+            self._footer.set_barangay(deployment_barangay)
+
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._header)
+        outer.addWidget(self._stack, stretch=1)
+        outer.addWidget(self._footer)
+        self.setCentralWidget(container)
 
         # Per-state timer used for all auto-return / hard-timeout
         # transitions. Single instance reused — Qt reschedules
@@ -321,6 +358,17 @@ class KioskMainWindow(QMainWindow):
 
         # Initial state is IDLE; render its content.
         self._stack.setCurrentWidget(self._screens[State.IDLE])
+        self._header.set_screen_title(_STATE_HEADER_TITLES.get(State.IDLE, ""))
+
+    @property
+    def stack(self) -> QStackedWidget:
+        """The QStackedWidget hosting per-state screens.
+
+        Exposed so tests can call ``main_window.stack.currentWidget()``;
+        production code uses the FSM-driven transitions in
+        :meth:`_on_fsm_state_changed`.
+        """
+        return self._stack
 
     # ------------------------------------------------------------------
     # Wiring
@@ -374,6 +422,7 @@ class KioskMainWindow(QMainWindow):
             screen.on_enter(active_language)
 
         self._stack.setCurrentWidget(screen)
+        self._header.set_screen_title(_STATE_HEADER_TITLES.get(state, ""))
         self._captured_types.clear()
         self._captured_real_types.clear()
         self._maybe_publish_bp_cancellation(self._previous_state, state)

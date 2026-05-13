@@ -44,18 +44,15 @@ class MeasuringVitalsScreen(BaseScreen):
 
         self._title = QLabel()
         self._title.setObjectName("measuring_vitals_title")
-        self._title.setStyleSheet("font-size: 28px; font-weight: bold;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._bp_instruction = QLabel()
         self._bp_instruction.setObjectName("measuring_vitals_bp_instruction")
         self._bp_instruction.setWordWrap(True)
-        self._bp_instruction.setStyleSheet("font-size: 18px;")
 
         self._pulse_instruction = QLabel()
         self._pulse_instruction.setObjectName("measuring_vitals_pulse_instruction")
         self._pulse_instruction.setWordWrap(True)
-        self._pulse_instruction.setStyleSheet("font-size: 18px;")
 
         # Status line driven by main_window.update_status. We
         # initialise to the "waiting" copy — the FSM auto-fires
@@ -64,7 +61,6 @@ class MeasuringVitalsScreen(BaseScreen):
         self._status = QLabel()
         self._status.setObjectName("measuring_vitals_status")
         self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status.setStyleSheet("font-size: 16px; color: #1a5fb4;")
 
         self._captured_list = QListWidget()
         self._captured_list.setObjectName("measuring_vitals_captured_list")

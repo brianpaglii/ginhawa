@@ -20,12 +20,10 @@ class AbortedScreen(QWidget):
         title_en = QLabel(BILINGUAL_STRINGS.aborted_title_en)
         title_en.setObjectName("aborted_title_en")
         title_en.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_en.setStyleSheet("font-size: 28px; font-weight: bold;")
 
         title_tl = QLabel(BILINGUAL_STRINGS.aborted_title_tl)
         title_tl.setObjectName("aborted_title_tl")
         title_tl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_tl.setStyleSheet("font-size: 28px; font-weight: bold;")
 
         message_en = QLabel(BILINGUAL_STRINGS.aborted_message_en)
         message_en.setObjectName("aborted_message_en")

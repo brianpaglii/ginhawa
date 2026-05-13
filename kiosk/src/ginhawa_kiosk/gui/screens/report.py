@@ -49,7 +49,6 @@ class ReportScreen(BaseScreen):
 
         self._title = QLabel()
         self._title.setObjectName("report_title")
-        self._title.setStyleSheet("font-size: 28px; font-weight: bold;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._list = QListWidget()
@@ -67,12 +66,10 @@ class ReportScreen(BaseScreen):
 
         self._print_button = QPushButton()
         self._print_button.setObjectName("report_print_button")
-        self._print_button.setStyleSheet("font-size: 22px; padding: 16px 32px;")
         self._print_button.clicked.connect(self.print_requested.emit)
 
         self._finish_button = QPushButton()
         self._finish_button.setObjectName("report_finish_without_printing_button")
-        self._finish_button.setStyleSheet("font-size: 18px; padding: 12px 24px;")
         self._finish_button.clicked.connect(self.finish_without_printing_requested.emit)
 
         button_row = QHBoxLayout()

@@ -143,7 +143,7 @@ def test_cancel_commits_aborted_state(
     assert fsm.state == "path_choice"
     session_id = fsm.current_session.id if fsm.current_session else None
 
-    screen = main_window.centralWidget().currentWidget()  # type: ignore[union-attr]
+    screen = main_window.stack.currentWidget()  # type: ignore[union-attr]
     screen.cancel_requested.emit()
 
     assert fsm.state == "aborted"
@@ -171,7 +171,7 @@ def test_change_language_commits_state(
 ) -> None:
     _drive_to_report(fsm, db_session, "CARD_CHGLANG_COMMIT")
 
-    screen = main_window.centralWidget().currentWidget()  # type: ignore[union-attr]
+    screen = main_window.stack.currentWidget()  # type: ignore[union-attr]
     screen.change_language_requested.emit()
 
     assert fsm.state == "language_select"
@@ -192,7 +192,7 @@ def test_path_selected_commits(
     fsm.citizen_identified(_make_citizen(db_session, "CARD_PATH_COMMIT"))
     fsm.language_chosen("en")
 
-    screen = main_window.centralWidget().currentWidget()  # type: ignore[union-attr]
+    screen = main_window.stack.currentWidget()  # type: ignore[union-attr]
     screen.path_selected.emit("vitals")
 
     assert fsm.state == "measuring_vitals"

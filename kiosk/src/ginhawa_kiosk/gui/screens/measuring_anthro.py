@@ -20,7 +20,6 @@ class MeasuringAnthroScreen(BaseScreen):
 
         self._title = QLabel()
         self._title.setObjectName("measuring_anthro_title")
-        self._title.setStyleSheet("font-size: 28px; font-weight: bold;")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self._height = QLabel()
@@ -32,9 +31,6 @@ class MeasuringAnthroScreen(BaseScreen):
         self._temperature = QLabel()
         self._temperature.setObjectName("measuring_anthro_temperature_instruction")
         self._temperature.setWordWrap(True)
-
-        for lbl in (self._height, self._weight, self._temperature):
-            lbl.setStyleSheet("font-size: 18px;")
 
         self._captured_list = QListWidget()
         self._captured_list.setObjectName("measuring_anthro_captured_list")

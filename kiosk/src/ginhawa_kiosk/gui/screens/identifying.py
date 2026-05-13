@@ -24,7 +24,6 @@ class IdentifyingScreen(QWidget):
         label = QLabel("...")
         label.setObjectName("identifying_label")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("font-size: 48px;")
 
         layout.addStretch(1)
         layout.addWidget(label)
