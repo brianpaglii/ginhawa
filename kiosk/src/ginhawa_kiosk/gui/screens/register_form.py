@@ -31,8 +31,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QDate, Qt, pyqtSignal
+from PyQt6.QtCore import QDate, QPoint, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCalendarWidget,
     QHBoxLayout,
@@ -41,6 +43,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -102,8 +105,29 @@ class _InlineCalendarPicker(QWidget):
             QCalendarWidget.HorizontalHeaderFormat.SingleLetterDayNames
         )
 
-        # Year jump buttons — unique objectNames so tests can target
-        # the back / forward direction individually via findChild.
+        # Disable the navigation-bar's month-name QToolButton popup
+        # menu. On touch screens the popup's menu items don't align
+        # with their hit-test regions reliably and tapping "January"
+        # often lands on "March". The « Month / Month » buttons below
+        # are the supported month-nav affordance. The button stays
+        # VISIBLE (so the current month name is still displayed) but
+        # is non-interactive; styles.qss keeps it looking normal
+        # rather than disabled-greyed.
+        month_button = self._calendar.findChild(QToolButton, "qt_calendar_monthbutton")
+        if month_button is not None:
+            month_button.setMenu(None)
+            month_button.setEnabled(False)
+
+        # Month / year / decade jump buttons — unique objectNames so
+        # tests can target each direction via findChild.
+        self._month_back = QPushButton("« Month")
+        self._month_back.setObjectName("calendarMonthBackButton")
+        self._month_back.clicked.connect(self._jump_month_back)
+
+        self._month_forward = QPushButton("Month »")
+        self._month_forward.setObjectName("calendarMonthForwardButton")
+        self._month_forward.clicked.connect(self._jump_month_forward)
+
         self._year_back = QPushButton("« Year")
         self._year_back.setObjectName("calendarYearBackButton")
         self._year_back.clicked.connect(self._jump_year_back)
@@ -122,10 +146,15 @@ class _InlineCalendarPicker(QWidget):
         self._decade_forward.setObjectName("calendarDecadeForwardButton")
         self._decade_forward.clicked.connect(self._jump_decade_forward)
 
+        # Order: decade > year > month on the left, mirrored on the
+        # right. Bigger jumps sit on the outside so the common case
+        # (single-month nudge) is closest to the centre stretch.
         jumps = QHBoxLayout()
         jumps.addWidget(self._decade_back)
         jumps.addWidget(self._year_back)
+        jumps.addWidget(self._month_back)
         jumps.addStretch(1)
+        jumps.addWidget(self._month_forward)
         jumps.addWidget(self._year_forward)
         jumps.addWidget(self._decade_forward)
 
@@ -164,6 +193,17 @@ class _InlineCalendarPicker(QWidget):
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _jump_month_back(self) -> None:
+        self._jump_months(-1)
+
+    def _jump_month_forward(self) -> None:
+        self._jump_months(1)
+
+    def _jump_months(self, delta: int) -> None:
+        # Delegate clamping to setSelectedDate so the month buttons
+        # can't push the selection outside [min, max] either.
+        self.setSelectedDate(self._calendar.selectedDate().addMonths(delta))
 
     def _jump_year_back(self) -> None:
         self._jump_years(-1)
@@ -286,18 +326,34 @@ class RegisterFormScreen(BaseScreen):
             self._submit_button, alignment=Qt.AlignmentFlag.AlignRight
         )
 
-        scroll = QScrollArea()
-        scroll.setObjectName("registerScrollArea")
-        scroll.setWidget(form_container)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setObjectName("registerScrollArea")
+        self._scroll_area.setWidget(form_container)
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._scroll_area.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
 
         outer_layout = QVBoxLayout()
         outer_layout.setContentsMargins(40, 24, 40, 24)
-        outer_layout.addWidget(scroll, 1)
+        outer_layout.addWidget(self._scroll_area, 1)
         outer_layout.addLayout(self._build_chrome_row())
         self.setLayout(outer_layout)
+
+        # Keyboard-aware scroll: when focus enters one of the form's
+        # text fields the virtual keyboard slides up from the bottom
+        # of the screen and would otherwise cover the field. Hook
+        # QApplication.focusChanged so we can scroll the focused
+        # widget above the keyboard. The connection is best-effort:
+        # in headless tests QApplication may not exist yet, in which
+        # case the form still constructs cleanly but auto-scroll is
+        # inert.
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            app.focusChanged.connect(self._on_focus_changed)
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -349,6 +405,59 @@ class RegisterFormScreen(BaseScreen):
         if self._sex_other.isChecked():
             return "O"
         return None
+
+    # ------------------------------------------------------------------
+    # Keyboard-aware scroll
+    # ------------------------------------------------------------------
+
+    def _on_focus_changed(self, _old: QWidget | None, new: QWidget | None) -> None:
+        # Only react when focus lands inside this screen — connection
+        # is at the QApplication level and fires for every widget.
+        if new is None:
+            return
+        parent: QWidget | None = new
+        while parent is not None and parent is not self:
+            parent = parent.parentWidget()
+        if parent is not self:
+            return
+        # 300 ms is enough for the Qt virtual keyboard's slide-up
+        # animation to settle so keyboardRectangle() reports the
+        # final geometry rather than a mid-animation value.
+        QTimer.singleShot(300, lambda: self._scroll_widget_into_view(new))
+
+    def _scroll_widget_into_view(self, widget: QWidget) -> None:
+        """Scroll the form so ``widget`` is visible above the keyboard."""
+        # Defensive: the widget may have been destroyed between the
+        # 300 ms timer schedule and now (e.g., language switch).
+        viewport = self._scroll_area.viewport()
+        if viewport is None or not widget.isVisible():
+            return
+
+        # QGuiApplication.inputMethod() is nullable per the stubs;
+        # the kiosk's Qt runtime always has one but mypy --strict
+        # wants the guard.
+        input_method = QGuiApplication.inputMethod()
+        if input_method is None:
+            return
+        keyboard_rect = input_method.keyboardRectangle()
+        keyboard_height = int(keyboard_rect.height())
+        # If Qt hasn't reported a rectangle yet but the IME claims to
+        # be visible, fall back to a sensible default — the Qt
+        # virtual keyboard on the kiosk's 1080p panel is ~400 px tall.
+        if keyboard_height == 0 and input_method.isVisible():
+            keyboard_height = 400
+
+        widget_top = widget.mapTo(viewport, QPoint(0, 0)).y()
+        widget_bottom = widget_top + widget.height()
+        visible_height = viewport.height() - keyboard_height
+
+        if widget_bottom > visible_height:
+            # 50 px padding above the keyboard edge so the field
+            # isn't flush against it.
+            delta = widget_bottom - visible_height + 50
+            scroll_bar = self._scroll_area.verticalScrollBar()
+            if scroll_bar is not None:
+                scroll_bar.setValue(scroll_bar.value() + delta)
 
     def _on_submit_clicked(self) -> None:
         # `on_enter` set self._language; validation errors render in

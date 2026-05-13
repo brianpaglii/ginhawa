@@ -14,7 +14,7 @@ pytest-qt's ``qtbot`` keeps the widget alive long enough to query.
 from __future__ import annotations
 
 from PyQt6.QtCore import QDate
-from PyQt6.QtWidgets import QHBoxLayout, QPushButton
+from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QToolButton
 from pytestqt.qtbot import QtBot
 
 from ginhawa_kiosk.gui.screens import RegisterFormScreen
@@ -126,3 +126,74 @@ def test_no_sex_radio_selected_by_default(qtbot: QtBot) -> None:
     assert not screen._sex_male.isChecked()
     assert not screen._sex_female.isChecked()
     assert not screen._sex_other.isChecked()
+
+
+# The "« Month" button decrements the selected date by one calendar
+# month. Replaces the QCalendarWidget's built-in month-name QMenu
+# which was unusable on touch — menu items don't align with their
+# hit-test regions and a tap on "January" often selected "March".
+# Mortality: would fail if the button's clicked signal weren't
+# wired or _jump_months used a wrong delta.
+def test_dob_month_back_button_decrements_one_month(qtbot: QtBot) -> None:
+    screen = RegisterFormScreen(default_barangay="")
+    qtbot.addWidget(screen)
+    start = screen._dob_input.selectedDate()
+    btn = screen._dob_input.findChild(QPushButton, "calendarMonthBackButton")
+    assert btn is not None, "expected « Month button by objectName"
+    btn.click()
+    assert screen._dob_input.selectedDate() == start.addMonths(-1)
+
+
+# Symmetric to the back test — Month » increments by one calendar
+# month, respecting any month-length differences (e.g., Jan 31 +1
+# lands on Feb 28/29).
+def test_dob_month_forward_button_increments_one_month(qtbot: QtBot) -> None:
+    screen = RegisterFormScreen(default_barangay="")
+    qtbot.addWidget(screen)
+    # Pick a known date so the assertion isn't affected by today's
+    # value (the constructor default is "today - 30 years", which
+    # could itself land on month 12 and roll over awkwardly).
+    screen._dob_input.setSelectedDate(QDate(1985, 3, 17))
+    btn = screen._dob_input.findChild(QPushButton, "calendarMonthForwardButton")
+    assert btn is not None, "expected Month » button by objectName"
+    btn.click()
+    assert screen._dob_input.selectedDate() == QDate(1985, 4, 17)
+
+
+# Month-back must respect the picker's minimum date (1900-01-01).
+# Starting at 1900-02-01 and pressing « Month should land on
+# 1900-01-01 the first time, and stay there on a second press
+# (clamping, not wrapping into 1899).
+# Mortality: would fail if _jump_months bypassed setSelectedDate's
+# clamping branch.
+def test_dob_month_back_clamps_at_minimum(qtbot: QtBot) -> None:
+    screen = RegisterFormScreen(default_barangay="")
+    qtbot.addWidget(screen)
+    screen._dob_input.setSelectedDate(QDate(1900, 2, 1))
+    btn = screen._dob_input.findChild(QPushButton, "calendarMonthBackButton")
+    assert btn is not None
+    btn.click()
+    assert screen._dob_input.selectedDate() == QDate(1900, 1, 1)
+    btn.click()  # second press — should not move
+    assert screen._dob_input.selectedDate() == QDate(1900, 1, 1)
+
+
+# The QCalendarWidget's built-in month-name QToolButton (Qt assigns
+# it objectName "qt_calendar_monthbutton") must have its popup menu
+# stripped AND be disabled so touch taps don't open a menu that the
+# citizen can't operate reliably. The « Month / Month » buttons are
+# the only supported month-nav affordance.
+# Mortality: would fail if the disable was reverted, or if Qt
+# renames the internal objectName (unlikely; this name has been
+# stable across Qt 5 and 6).
+def test_calendar_month_button_dropdown_disabled(qtbot: QtBot) -> None:
+    screen = RegisterFormScreen(default_barangay="")
+    qtbot.addWidget(screen)
+    month_button = screen._dob_input._calendar.findChild(
+        QToolButton, "qt_calendar_monthbutton"
+    )
+    assert month_button is not None, (
+        "expected qt_calendar_monthbutton inside QCalendarWidget"
+    )
+    assert not month_button.isEnabled()
+    assert month_button.menu() is None

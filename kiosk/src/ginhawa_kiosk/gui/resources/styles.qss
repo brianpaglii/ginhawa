@@ -781,6 +781,29 @@ QPushButton#calendarYearForwardButton:pressed {{
     background-color: {primary_dark};
 }}
 
+/* Month jump buttons — light-teal fill, smaller visual weight than
+   year buttons because month nudges are the most common operation
+   and shouldn't dominate the row visually. */
+QPushButton#calendarMonthBackButton,
+QPushButton#calendarMonthForwardButton {{
+    background-color: {primary_light};
+    color: {text_on_primary};
+    font-size: {body_size}px;
+    font-weight: 600;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 20px;
+    min-height: 60px;
+    min-width: 120px;
+}}
+
+QPushButton#calendarMonthBackButton:hover,
+QPushButton#calendarMonthBackButton:pressed,
+QPushButton#calendarMonthForwardButton:hover,
+QPushButton#calendarMonthForwardButton:pressed {{
+    background-color: {primary};
+}}
+
 /* Decade jump buttons — primary-outline (secondary affordance) so the
    year buttons read as the more common operation. */
 QPushButton#calendarDecadeBackButton,
@@ -794,6 +817,18 @@ QPushButton#calendarDecadeForwardButton {{
     padding: 12px 20px;
     min-height: 60px;
     min-width: 120px;
+}}
+
+/* The built-in month-name button (Qt's internal
+   ``qt_calendar_monthbutton``) is disabled in Python — its popup
+   menu was unusable on touch. Override the default disabled
+   appearance so it still LOOKS like an active display label;
+   citizens shouldn't read "greyed out month" as a broken control. */
+QCalendarWidget#registerDobCalendar QToolButton#qt_calendar_monthbutton,
+QCalendarWidget#registerDobCalendar QToolButton#qt_calendar_monthbutton:disabled {{
+    background-color: transparent;
+    color: {text_on_primary};
+    font-weight: 700;
 }}
 
 QPushButton#calendarDecadeBackButton:hover,
