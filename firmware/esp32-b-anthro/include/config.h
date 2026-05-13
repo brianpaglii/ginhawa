@@ -13,7 +13,7 @@
 // fabrication may use a placeholder value (e.g., 200.0); update
 // before deployment. Citizen height is computed as
 // PILLAR_HEIGHT_CM - measured_distance_cm.
-constexpr float PILLAR_HEIGHT_CM = 200.0f;
+constexpr float PILLAR_HEIGHT_CM = 198.0f;
 
 // Validated citizen-height range. Sensor distances outside this
 // imply either no citizen present or the sensor is misaligned;
@@ -21,7 +21,7 @@ constexpr float PILLAR_HEIGHT_CM = 200.0f;
 // tolerates absent height readings via offline placeholders, so
 // dropping is preferable to publishing a nonsense value.
 constexpr float MIN_HEIGHT_CM = 100.0f;
-constexpr float MAX_HEIGHT_CM = 200.0f;
+constexpr float MAX_HEIGHT_CM = 198.0f;
 
 // Sample cadence and smoothing.
 constexpr unsigned long HEIGHT_SAMPLE_INTERVAL_MS = 500;
