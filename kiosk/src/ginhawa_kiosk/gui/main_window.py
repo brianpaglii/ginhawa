@@ -1015,10 +1015,21 @@ class KioskMainWindow(QMainWindow):
             ReportRow(
                 label=labels.get(m.type, m.type),
                 value=self._format_value(m.type, float(m.value), m.unit),
+                measurement_type=m.type,
             )
             for m in rows_db
         ]
-        self._report_screen.set_measurements(rows)
+        # ``measurement_path`` is set by the FSM when the citizen picks
+        # a path. The report screen filters rows so anthro-only and
+        # vitals-only sessions only show their chosen measurement set —
+        # offline placeholders and stray pre-fires for the other path
+        # stay in the DB (for audit) but don't surface here.
+        measurement_path = (
+            self._fsm.current_session.measurement_path
+            if self._fsm.current_session is not None
+            else None
+        )
+        self._report_screen.set_measurements(rows, measurement_path)
         self._report_screen.set_printer_state(
             available=self._printer.is_available(),
             paper_present=self._printer.is_paper_present(),

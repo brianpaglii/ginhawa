@@ -33,10 +33,46 @@ from .base import BaseScreen
 class ReportRow:
     """One row to render in the report. The screen has already
     received only ``is_valid=1`` rows from the main window — it does
-    not re-filter."""
+    not re-filter on validity."""
 
     label: str  # already localised by the caller
     value: str  # rendered value with units, e.g., "128 mmHg"
+    # Schema measurement type (e.g., "systolic_bp", "weight"). Used to
+    # filter the displayed rows against the session's measurement_path
+    # so a vitals_only session doesn't show an anthropometric reading
+    # that a pre-firing scale wrote to the DB. Empty string means the
+    # caller didn't tag the row (legacy / tests) and the path filter
+    # treats it as "always show".
+    measurement_type: str = ""
+
+
+# Measurement types that belong to each session path. Mirrors the
+# ``_VITALS_TYPES`` / ``_ANTHRO_TYPES`` sets in ``main_window`` but is
+# duplicated here on purpose: the screen's filter is the authoritative
+# citizen-facing boundary, and we want it independently testable
+# without importing main_window. ``bmi`` is anthropometric (derived
+# from height + weight).
+_VITALS_TYPES = frozenset(
+    {"systolic_bp", "diastolic_bp", "heart_rate", "spo2", "temperature"}
+)
+_ANTHRO_TYPES = frozenset({"weight", "height", "bmi"})
+
+
+def _row_matches_path(row: ReportRow, measurement_path: str | None) -> bool:
+    # ``None`` and ``"full"`` show everything. Unrecognised paths fall
+    # through to "show everything" — the schema's CHECK constraint
+    # already restricts the column to the three valid values, so any
+    # other string is a code-side bug, not a citizen-visible state we
+    # should hide measurements over.
+    if measurement_path in (None, "full"):
+        return True
+    if not row.measurement_type:
+        return True
+    if measurement_path == "vitals":
+        return row.measurement_type in _VITALS_TYPES
+    if measurement_path == "anthropometric":
+        return row.measurement_type in _ANTHRO_TYPES
+    return True
 
 
 class ReportScreen(BaseScreen):
@@ -93,19 +129,32 @@ class ReportScreen(BaseScreen):
     # API used by the main window
     # ------------------------------------------------------------------
 
-    def set_measurements(self, rows: list[ReportRow]) -> None:
+    def set_measurements(
+        self,
+        rows: list[ReportRow],
+        measurement_path: str | None = None,
+    ) -> None:
         """Replace the rendered list with the given valid rows.
 
         The caller is responsible for filtering to ``is_valid=1``;
         passing an out-of-range row would silently advertise it to
         the citizen and is treated as a wiring bug at the call site.
+
+        ``measurement_path`` mirrors ``Session.measurement_path``: one
+        of ``"vitals"``, ``"anthropometric"``, ``"full"``, or ``None``.
+        Vitals-only and anthro-only sessions hide rows that don't
+        belong to the chosen path — most importantly so a stray scale
+        reading written during a vitals-only session (Problem 2) never
+        surfaces on the citizen-visible report even though it persists
+        in the DB. ``"full"`` and ``None`` pass every row through.
         """
+        filtered = [r for r in rows if _row_matches_path(r, measurement_path)]
         self._list.clear()
-        for r in rows:
+        for r in filtered:
             item = QListWidgetItem(f"{r.label}: {r.value}")
             self._list.addItem(item)
-        self._no_measurements.setVisible(not rows)
-        self._list.setVisible(bool(rows))
+        self._no_measurements.setVisible(not filtered)
+        self._list.setVisible(bool(filtered))
 
     def set_printer_state(self, *, available: bool, paper_present: bool) -> None:
         """Show or hide the Print button based on printer state.
