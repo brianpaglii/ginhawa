@@ -28,6 +28,16 @@ class LanguageSelectScreen(BaseScreen):
 
         layout = QVBoxLayout()
 
+        # Personalized greeting — populated on entry by main_window
+        # via set_citizen_first_name() with the FSM's current
+        # citizen. Hidden when no citizen is attached (defensive;
+        # LANGUAGE_SELECT only follows successful identification, so
+        # this should always be set in practice).
+        self._greeting = QLabel("")
+        self._greeting.setObjectName("languageSelectGreeting")
+        self._greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._greeting.setVisible(False)
+
         # Bilingual heading — both forms always visible. The screenH2
         # objectName lets the global stylesheet drive the font size.
         heading_en = QLabel(get_strings("en").language_select_title)
@@ -57,6 +67,8 @@ class LanguageSelectScreen(BaseScreen):
         buttons_row.addStretch(1)
 
         layout.addStretch(1)
+        layout.addWidget(self._greeting)
+        layout.addSpacing(16)
         layout.addWidget(heading_en)
         layout.addSpacing(8)
         layout.addWidget(heading_tl)
@@ -69,6 +81,27 @@ class LanguageSelectScreen(BaseScreen):
 
         self._en_button = en_button
         self._tl_button = tl_button
+
+    def set_citizen_first_name(self, first_name: str | None) -> None:
+        """Update the personalized greeting above the headings.
+
+        ``first_name`` is the citizen's first word from full_name —
+        the caller is expected to do the split. Pass ``None`` or an
+        empty string to hide the greeting; the screen falls back to
+        the bilingual "Choose Language / Pumili ng Wika" heading
+        alone, which is the original pre-greeting behaviour.
+
+        The greeting is intentionally bilingual ("Hi, X! Kumusta?")
+        rather than language-switched — the citizen hasn't picked a
+        language yet, and a mixed greeting feels warmer than a
+        formal one-or-the-other.
+        """
+        if first_name:
+            self._greeting.setText(f"Hi, {first_name}! Kumusta?")
+            self._greeting.setVisible(True)
+        else:
+            self._greeting.setText("")
+            self._greeting.setVisible(False)
 
     def on_enter(self, language: Language) -> None:
         # The Change-language button is meaningless on this screen

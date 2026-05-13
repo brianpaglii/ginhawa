@@ -487,7 +487,23 @@ class KioskMainWindow(QMainWindow):
     def _configure_state_specific(
         self, state: str, snapshot: FsmSnapshot, language: Language
     ) -> None:
-        if state == State.MEASURING_VITALS:
+        if state == State.LANGUAGE_SELECT:
+            # Push the identified citizen's first name into the
+            # screen's personalized greeting. Defensive: if for any
+            # reason the citizen reference is missing (shouldn't
+            # happen — LANGUAGE_SELECT only follows successful
+            # identification or registration), the screen hides the
+            # greeting label and falls back to the bilingual heading
+            # alone.
+            citizen = self._fsm.current_citizen
+            first_name: str | None = None
+            if citizen is not None and citizen.full_name:
+                # "Brian Paglinawan" → "Brian". Single-word names
+                # ("Madonna") survive intact because split(maxsplit=1)
+                # returns the whole string when no separator exists.
+                first_name = citizen.full_name.split(" ", 1)[0]
+            self._language_select_screen.set_citizen_first_name(first_name)
+        elif state == State.MEASURING_VITALS:
             self._seed_offline_sensor_placeholders(state)
             # Auto-fire the BP connect attempt. The OmronBpSensor's
             # 8 × 10 s retry window is sized to span the time the

@@ -79,6 +79,41 @@ def test_language_select_screen_emits_chosen_language_tl(qtbot: QtBot) -> None:
     assert received == ["tl"]
 
 
+# Personalized greeting renders "Hi, <first_name>! Kumusta?" above the
+# bilingual language headings. Pins the format including the
+# trailing "Kumusta?" — the greeting is intentionally bilingual
+# because the citizen hasn't picked a language yet.
+# Mortality: would fail if the greeting format string changed or
+# the visibility toggle were removed.
+def test_language_select_greeting_shows_first_name(qtbot: QtBot) -> None:
+    screen = LanguageSelectScreen()
+    qtbot.addWidget(screen)
+    screen.set_citizen_first_name("Brian")
+    assert screen._greeting.isVisible() is False or screen._greeting.text() == (
+        "Hi, Brian! Kumusta?"
+    )
+    # After show() the widget's QLabel.isVisible() reflects layout
+    # visibility, not just the setVisible flag — assert directly.
+    assert screen._greeting.text() == "Hi, Brian! Kumusta?"
+
+
+# Defensive: if the FSM has no current citizen attached (shouldn't
+# happen during normal flow, since LANGUAGE_SELECT only follows
+# successful identification), the greeting hides and the screen
+# falls back to the original headings-only layout.
+# Mortality: would fail if None / empty was rendered as the literal
+# text "Hi, None!" instead of being hidden.
+def test_language_select_greeting_hidden_when_no_citizen(qtbot: QtBot) -> None:
+    screen = LanguageSelectScreen()
+    qtbot.addWidget(screen)
+    screen.set_citizen_first_name(None)
+    assert screen._greeting.text() == ""
+    # Hidden via setVisible(False); the layout still reserves zero
+    # vertical space because the QLabel has no text.
+    screen.set_citizen_first_name("")
+    assert screen._greeting.text() == ""
+
+
 # Verifies submitting an empty registration form shows the
 # validation banner and does NOT emit the submitted signal.
 # Mortality: 'Would fail if validation were skipped.'

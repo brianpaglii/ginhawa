@@ -857,6 +857,18 @@ QLabel#calendarSelectedLabel {{
     margin-top: 4px;
 }}
 
+/* Personalized greeting on LANGUAGE_SELECT — sits above the
+   bilingual "Choose Language / Pumili ng Wika" heading. Teal +
+   bold so the citizen feels the system recognised them, but not
+   so loud that it dominates the language buttons below. Hidden
+   when the FSM has no current citizen attached. */
+QLabel#languageSelectGreeting {{
+    color: {primary};
+    font-size: {h2_size}px;
+    font-weight: 800;
+    padding: 24px 0;
+}}
+
 /* List widgets used on measuring + report screens ------------------- */
 
 QListWidget {{
