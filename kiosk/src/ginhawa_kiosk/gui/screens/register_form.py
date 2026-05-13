@@ -35,12 +35,12 @@ from PyQt6.QtCore import QDate, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCalendarWidget,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -257,40 +257,47 @@ class RegisterFormScreen(BaseScreen):
         sex_row.addWidget(self._sex_female, 1)
         sex_row.addWidget(self._sex_other, 1)
 
-        # The QFormLayout (label-left, field-right) is great for one-
-        # line inputs but ugly when one of the fields is a 720x560
-        # inline calendar — the label column gets squished. So the
-        # DOB block lives in its own vertical sub-layout above the
-        # remaining form-style rows, while Name keeps the QFormLayout
-        # treatment for visual consistency with Sex / Barangay / Phone.
-        name_form = QFormLayout()
-        name_form.addRow(self._name_label, self._name_input)
+        # Flat vertical layout (label-above-input) inside a scroll
+        # container. The inline calendar is too wide to share a row
+        # with its label in a QFormLayout, and even at the reduced
+        # max-height of ~440 px the full form (title + intro + name
+        # + DOB + sex + barangay + phone + submit) can exceed 1080.
+        # QScrollArea handles overflow cleanly; the chrome row stays
+        # OUTSIDE the scroll area so Cancel / Change Language remain
+        # visible regardless of scroll position.
+        form_container = QWidget()
+        form_layout = QVBoxLayout(form_container)
+        form_layout.setSpacing(16)
+        form_layout.addWidget(self._title)
+        form_layout.addWidget(self._intro)
+        form_layout.addSpacing(8)
+        form_layout.addWidget(self._name_label)
+        form_layout.addWidget(self._name_input)
+        form_layout.addWidget(self._dob_label)
+        form_layout.addWidget(self._dob_input)
+        form_layout.addWidget(self._sex_label)
+        form_layout.addLayout(sex_row)
+        form_layout.addWidget(self._barangay_label)
+        form_layout.addWidget(self._barangay_input)
+        form_layout.addWidget(self._phone_label)
+        form_layout.addWidget(self._phone_input)
+        form_layout.addWidget(self._error_label)
+        form_layout.addWidget(
+            self._submit_button, alignment=Qt.AlignmentFlag.AlignRight
+        )
 
-        dob_section = QVBoxLayout()
-        dob_section.setSpacing(12)
-        dob_section.addWidget(self._dob_label)
-        dob_section.addWidget(self._dob_input)
+        scroll = QScrollArea()
+        scroll.setObjectName("registerScrollArea")
+        scroll.setWidget(form_container)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        rest_form = QFormLayout()
-        rest_form.addRow(self._sex_label, sex_row)
-        rest_form.addRow(self._barangay_label, self._barangay_input)
-        rest_form.addRow(self._phone_label, self._phone_input)
-
-        layout = QVBoxLayout()
-        layout.addWidget(self._title)
-        layout.addWidget(self._intro)
-        layout.addSpacing(16)
-        layout.addLayout(name_form)
-        layout.addSpacing(12)
-        layout.addLayout(dob_section)
-        layout.addSpacing(12)
-        layout.addLayout(rest_form)
-        layout.addWidget(self._error_label)
-        layout.addStretch(1)
-        layout.addWidget(self._submit_button, alignment=Qt.AlignmentFlag.AlignRight)
-        layout.addLayout(self._build_chrome_row())
-
-        self.setLayout(layout)
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(40, 24, 40, 24)
+        outer_layout.addWidget(scroll, 1)
+        outer_layout.addLayout(self._build_chrome_row())
+        self.setLayout(outer_layout)
 
     # ------------------------------------------------------------------
     # Lifecycle

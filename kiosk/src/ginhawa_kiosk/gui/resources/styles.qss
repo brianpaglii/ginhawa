@@ -698,21 +698,23 @@ QCalendarWidget QWidget#qt_calendar_navigationbar {{
    require tapping the tiny built-in spinbox. */
 QCalendarWidget#registerDobCalendar {{
     background-color: {background};
-    min-width: 720px;
-    min-height: 560px;
+    min-width: 560px;
+    max-width: 700px;
+    min-height: 380px;
+    max-height: 440px;
     font-size: {body_size}px;
 }}
 
 QCalendarWidget#registerDobCalendar QToolButton {{
     color: {text_on_primary};
     background-color: {primary};
-    font-size: {body_size}px;
+    font-size: {body_sm_size}px;
     font-weight: 600;
-    min-height: 64px;
-    min-width: 64px;
+    min-height: 48px;
+    min-width: 48px;
     margin: 4px;
-    padding: 8px 16px;
-    border-radius: 8px;
+    padding: 6px 12px;
+    border-radius: 6px;
 }}
 
 QCalendarWidget#registerDobCalendar QToolButton:hover,
@@ -741,8 +743,8 @@ QCalendarWidget#registerDobCalendar QAbstractItemView {{
 }}
 
 QCalendarWidget#registerDobCalendar QAbstractItemView::item {{
-    min-height: 64px;
-    min-width: 64px;
+    min-height: 44px;
+    min-width: 44px;
 }}
 
 QCalendarWidget#registerDobCalendar QAbstractItemView:enabled {{
@@ -755,7 +757,7 @@ QCalendarWidget#registerDobCalendar QAbstractItemView:disabled {{
 
 QCalendarWidget#registerDobCalendar QWidget#qt_calendar_navigationbar {{
     background-color: {surface};
-    min-height: 80px;
+    min-height: 64px;
 }}
 
 /* Year jump buttons — primary-filled call-to-action style. */
@@ -763,13 +765,13 @@ QPushButton#calendarYearBackButton,
 QPushButton#calendarYearForwardButton {{
     background-color: {primary};
     color: {text_on_primary};
-    font-size: {body_lg_size}px;
+    font-size: {body_size}px;
     font-weight: 700;
     border: none;
-    border-radius: 12px;
-    padding: 16px 32px;
-    min-height: 80px;
-    min-width: 160px;
+    border-radius: 10px;
+    padding: 12px 20px;
+    min-height: 60px;
+    min-width: 120px;
 }}
 
 QPushButton#calendarYearBackButton:hover,
@@ -785,13 +787,13 @@ QPushButton#calendarDecadeBackButton,
 QPushButton#calendarDecadeForwardButton {{
     background-color: {background};
     color: {primary};
-    font-size: {body_lg_size}px;
+    font-size: {body_size}px;
     font-weight: 700;
     border: 2px solid {primary};
-    border-radius: 12px;
-    padding: 16px 32px;
-    min-height: 80px;
-    min-width: 160px;
+    border-radius: 10px;
+    padding: 12px 20px;
+    min-height: 60px;
+    min-width: 120px;
 }}
 
 QPushButton#calendarDecadeBackButton:hover,
@@ -805,13 +807,50 @@ QPushButton#calendarDecadeForwardButton:pressed {{
    immediate confirmation that their tap registered. */
 QLabel#calendarSelectedLabel {{
     color: {text_primary};
-    font-size: {h3_size}px;
+    font-size: {body_lg_size}px;
     font-weight: 700;
     background-color: {surface};
     border: 2px solid {primary};
-    border-radius: 12px;
-    padding: 16px;
-    margin-top: 8px;
+    border-radius: 10px;
+    padding: 10px;
+    margin-top: 4px;
+}}
+
+/* Register-form scroll wrapper — the form's height (calendar +
+   name + sex + barangay + phone + submit) can exceed 1080 px once
+   the inline calendar is in place. A QScrollArea wraps the whole
+   form body so overflow always scrolls cleanly. The wide handle
+   is touch-friendly. */
+QScrollArea#registerScrollArea {{
+    background-color: {background};
+    border: none;
+}}
+
+QScrollArea#registerScrollArea > QWidget > QWidget {{
+    background-color: {background};
+}}
+
+QScrollArea#registerScrollArea QScrollBar:vertical {{
+    background: {surface};
+    width: 24px;
+    border-radius: 6px;
+    margin: 0;
+}}
+
+QScrollArea#registerScrollArea QScrollBar::handle:vertical {{
+    background: {primary};
+    min-height: 60px;
+    border-radius: 6px;
+}}
+
+QScrollArea#registerScrollArea QScrollBar::handle:vertical:hover {{
+    background: {primary_dark};
+}}
+
+QScrollArea#registerScrollArea QScrollBar::add-line:vertical,
+QScrollArea#registerScrollArea QScrollBar::sub-line:vertical {{
+    height: 0px;
+    background: none;
 }}
 
 /* List widgets used on measuring + report screens ------------------- */
