@@ -63,14 +63,20 @@ void loop() {
     unsigned long now = millis();
     if (now - g_last_height_ms >= HEIGHT_SAMPLE_INTERVAL_MS) {
         g_last_height_ms = now;
-        OptionalHeight reading = sensor_vl53l0x_read_smoothed();
-        if (reading.has_value) {
-            Serial.printf("Height: %.1f cm\n", reading.value);
+        // Gated publish (ADR-0019): the gate fires exactly once per
+        // stable 5 s window, then enters a 5 s cooldown. Earlier
+        // versions of this firmware published every smoothed read,
+        // so the first few values a citizen produced while walking
+        // into range (shoulders / mid-step / hunching) were sent
+        // verbatim to the kiosk — wildly low for taller citizens.
+        GatedHeight gated = sensor_vl53l0x_tick_gate();
+        if (gated.fired) {
+            Serial.printf("Height GATE FIRED: %.1f cm\n", gated.value_cm);
             // Pass nullptr for captured_at — the kiosk's mqtt_sensors
             // subscriber stamps capture time on receipt; the ESP32
             // skips NTP entirely (no internet dependency).
             char payload[128];
-            if (json_encode_measurement(reading.value, MQTT_TOPIC_UNIT,
+            if (json_encode_measurement(gated.value_cm, MQTT_TOPIC_UNIT,
                                         nullptr, payload, sizeof(payload))) {
                 if (!mqtt_publish_qos1(g_topic, payload)) {
                     Serial.println("WARN: mqtt publish failed");

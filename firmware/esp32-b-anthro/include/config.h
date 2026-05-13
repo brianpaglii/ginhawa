@@ -27,6 +27,17 @@ constexpr float MAX_HEIGHT_CM = 198.0f;
 constexpr unsigned long HEIGHT_SAMPLE_INTERVAL_MS = 500;
 constexpr int HEIGHT_MEDIAN_WINDOW = 3;
 
+// Stabilization gate (see ADR-0019). Citizens walking into the
+// sensor range catch shoulders, hair, or mid-step poses on the
+// first few smoothed reads — without this gate the kiosk received
+// wildly low values (e.g., 90 cm for a 172 cm citizen). The gate
+// requires WINDOW_MS of consecutive readings within ±TOLERANCE_CM
+// of an anchor before firing exactly one publish, then enters a
+// COOLDOWN to block re-firing for the same standstill.
+constexpr unsigned long HEIGHT_STABILIZATION_WINDOW_MS = 5000;
+constexpr float HEIGHT_STABILIZATION_TOLERANCE_CM = 1.0f;
+constexpr unsigned long HEIGHT_POST_PUBLISH_COOLDOWN_MS = 5000;
+
 // VL53L0X timing budget for long-range mode (μs). Longer = more
 // accurate at distance, slower per-sample. 200 ms matches the
 // Pololu library's "long range" example.
