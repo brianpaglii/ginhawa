@@ -64,7 +64,7 @@ def create_xiaomi_scale(
     if settings.MOCK_HARDWARE:
         return MockXiaomiScale(bus)
     return XiaomiScaleSensor(  # pragma: no cover - hardware path
-        bus, db, ble_lock=ble_lock
+        bus, db, ble_lock=ble_lock, scale_mac=settings.KIOSK_SCALE_MAC
     )
 
 

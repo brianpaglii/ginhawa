@@ -34,11 +34,9 @@ Decisions pinned by code:
 
 from __future__ import annotations
 
-import struct
 import time
 from collections import deque
 from collections.abc import Mapping
-from datetime import datetime, timezone
 from statistics import median
 from typing import Any
 
@@ -197,66 +195,6 @@ def extract_mass_kg(entity_values: Mapping[Any, Any]) -> float | None:
 
 
 # ---------------------------------------------------------------------------
-# Diagnostic — S200 advert timestamp re-parse (no behavior change)
-# ---------------------------------------------------------------------------
-#
-# Used to determine what kind of timestamp the scale emits before
-# writing the session-floor fix per
-# docs/audits/2026-05-13-scale-stale-readings-audit.md. The xiaomi-ble
-# parser at obj4e16 unpacks `(profile_id, weight, timestamp)` from the
-# 9-byte object body but discards the timestamp. We re-scan the raw
-# service_data for the obj4e16 marker (object id 0x4E16, little-endian
-# bytes 0x16 0x4E) and read the 4-byte timestamp field directly so a
-# bench operator can correlate values across rebroadcasts.
-#
-# Caveat: the S200 typically advertises with MiBeacon encryption (the
-# kiosk loads a per-scale bindkey to decrypt). For encrypted adverts
-# the obj4e16 TLV will not appear in the cleartext bytes and this
-# helper returns None — that's still a useful diagnostic ("the
-# library can decrypt; we cannot from raw bytes"), and the next
-# iteration will pivot to a different surfacing approach.
-
-
-_OBJ_ID_S200 = 0x4E16
-
-
-def _extract_s200_advert_timestamp(
-    service_data: Mapping[str, bytes],
-) -> int | None:
-    """Scan raw service_data for the obj4e16 timestamp field.
-
-    Walks each service_data payload looking for the obj4e16 marker
-    (little-endian object id 0x4E16) followed by a 9-byte body whose
-    layout is ``<BII>`` per xiaomi-ble's ``obj4e16`` parser.
-    Returns the unsigned 32-bit timestamp on a successful match,
-    ``None`` otherwise (encrypted advert, marker not present,
-    truncated, etc.).
-
-    Diagnostic-only; no behavior change. See
-    ``docs/audits/2026-05-13-scale-stale-readings-audit.md``.
-    """
-    try:
-        for _uuid, payload in service_data.items():
-            if len(payload) < 12:
-                continue
-            i = 0
-            # Last viable start position: header (2) + length (1) +
-            # body (9) = 12 bytes.
-            while i <= len(payload) - 12:
-                obj_id = int.from_bytes(payload[i : i + 2], "little")
-                if obj_id == _OBJ_ID_S200:
-                    body_len = payload[i + 2]
-                    if body_len == 9:
-                        body = payload[i + 3 : i + 3 + 9]
-                        _profile_id, _data, ts = struct.unpack("<BII", body)
-                        return int(ts)
-                i += 1
-    except Exception:  # pragma: no cover - defensive scan
-        return None
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Mock
 # ---------------------------------------------------------------------------
 
@@ -325,6 +263,7 @@ class XiaomiScaleSensor(Sensor):
         db: Session,
         *,
         ble_lock: BleAdapterLock | None = None,
+        scale_mac: str = "",
     ) -> None:
         self._bus = bus
         self._db = db
@@ -339,6 +278,18 @@ class XiaomiScaleSensor(Sensor):
         # :mod:`ginhawa_kiosk.sensors.ble_lock` for the why.
         self._ble_lock = ble_lock
         self._paused = False
+        # MAC filter (commissioning-time constant). The xiaomi_ble
+        # library's update() is stateful: a call with ANY device's
+        # advert returns cached mass from the last-parsed scale
+        # advert. Without filtering, every nearby BLE device's advert
+        # caused the gate to receive the stored scale value. We drop
+        # everything that isn't the configured scale MAC. Empty string
+        # = legacy "accept all" path with a one-shot warning at the
+        # first advert (kept for dev / mock paths; production sets the
+        # MAC via Settings.KIOSK_SCALE_MAC). See
+        # docs/audits/2026-05-13-scale-stale-readings-audit.md.
+        self._scale_mac = scale_mac.strip().upper() if scale_mac else ""
+        self._mac_warning_emitted = False
 
     async def start(self) -> None:
         if self._running:  # pragma: no cover - idempotency guard
@@ -462,6 +413,26 @@ class XiaomiScaleSensor(Sensor):
     async def _on_advertisement(  # pragma: no cover - hardware path
         self, ble_device: Any, advertisement_data: Any
     ) -> None:
+        # MAC filter (commissioning-time constant). Drop adverts that
+        # don't come from the configured scale BEFORE handing them to
+        # the stateful xiaomi_ble library — otherwise update() returns
+        # cached mass from the last scale advert and the gate fires
+        # on rebroadcasts via unrelated devices. Audit:
+        # docs/audits/2026-05-13-scale-stale-readings-audit.md.
+        if self._scale_mac:
+            if ble_device.address.upper() != self._scale_mac:
+                return
+        elif not self._mac_warning_emitted:
+            self._logger.warning(
+                "xiaomi_scale.mac_filter_disabled",
+                reason=(
+                    "KIOSK_SCALE_MAC not configured; accepting all "
+                    "adverts (legacy unsafe behavior, allows cached "
+                    "library state to poison the gate)"
+                ),
+            )
+            self._mac_warning_emitted = True
+
         # Wrap into BluetoothServiceInfoBleak per the spike findings —
         # xiaomi_ble's update() expects this shape.
         from home_assistant_bluetooth import BluetoothServiceInfoBleak
@@ -484,22 +455,24 @@ class XiaomiScaleSensor(Sensor):
             return
         update = self._device_data.update(service_info)
 
-        # Diagnostic-only (no behavior change): re-extract the S200
-        # advert timestamp from the raw service_data and log it
-        # alongside the kiosk's wall-clock receipt time so a bench
-        # operator can determine the timestamp's reference (Unix
-        # epoch, seconds-since-power-on, sequence counter, ...) before
-        # the session-floor fix is implemented. Audit:
-        # docs/audits/2026-05-13-scale-stale-readings-audit.md.
-        advert_ts = _extract_s200_advert_timestamp(advertisement_data.service_data)
+        # Diagnostic visibility — kept at info while the MAC filter
+        # is being bench-validated; demote to debug or remove once
+        # the fix is confirmed steady. advert_timestamp is fixed at
+        # None: the previous re-parse approach turned out moot (the
+        # actual bug was library state pollution, not advert
+        # timestamp semantics — see audit Sections 4-5).
         diag_mass = extract_mass_kg(update.entity_values)
         self._logger.info(
             "xiaomi_scale.advert_diagnostic",
-            advert_timestamp=advert_ts,
+            advert_timestamp=None,
             kiosk_receipt_time=time.time(),
-            kiosk_receipt_iso=datetime.now(timezone.utc).isoformat(),
             mass_kg=diag_mass,
             mac=ble_device.address,
+            is_scale_mac=(
+                ble_device.address.upper() == self._scale_mac
+                if self._scale_mac
+                else None
+            ),
         )
 
         await self._on_sensor_update(update.entity_values)

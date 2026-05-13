@@ -111,6 +111,21 @@ class Settings(BaseSettings):
     # fallback for unknown printers.
     KIOSK_PRINTER_PROFILE: str | None = None
 
+    # --- Xiaomi scale --------------------------------------------------
+    # MAC address of the deployment's Xiaomi S200 scale. Used to
+    # filter BLE adverts at the receipt boundary so the stateful
+    # ``xiaomi_ble`` library cannot re-deliver cached mass values
+    # through unrelated devices' adverts. Empty = legacy "accept all
+    # adverts" behaviour (logged as a warning at first non-scale
+    # advert). Set in /etc/ginhawa/kiosk.env on the Pi.
+    #
+    # Discovery: ``bluetoothctl scan on`` while stepping on the scale,
+    # OR the ``xiaomi_scale.advert_diagnostic`` log lines and look for
+    # the MAC whose mass value transitions when the citizen actually
+    # steps on. Bench-confirmed 2026-05-13:
+    # docs/audits/2026-05-13-scale-stale-readings-audit.md.
+    KIOSK_SCALE_MAC: str = ""
+
     # --- Observability ---------------------------------------------------
     LOG_LEVEL: str = "INFO"
 
