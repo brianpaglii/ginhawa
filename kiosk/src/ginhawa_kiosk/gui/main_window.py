@@ -370,6 +370,16 @@ class KioskMainWindow(QMainWindow):
         """
         return self._stack
 
+    def set_network_online(self, online: bool) -> None:
+        """Forward cloud-reachability state to the branded footer.
+
+        Wired in ``__main__.py`` as the ``SyncDaemon.on_cycle_complete``
+        callback: every sync cycle that made at least one HTTP attempt
+        flips the footer's network indicator. Empty cycles (nothing to
+        sync) don't fire — the footer keeps its last known state.
+        """
+        self._footer.set_network_online(online)
+
     # ------------------------------------------------------------------
     # Wiring
     # ------------------------------------------------------------------

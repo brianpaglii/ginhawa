@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import select
@@ -240,6 +241,7 @@ class SyncDaemon:
         cloud: CloudClient,
         interval_seconds: float = 30.0,
         logger: Any | None = None,
+        on_cycle_complete: Callable[[bool], None] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._cloud = cloud
@@ -247,6 +249,15 @@ class SyncDaemon:
         self._logger = logger or _default_logger()
         self._stop = asyncio.Event()
         self._stopped_due_to_credential_error = False
+        # Optional hook fired after every cycle that made at least one
+        # HTTP attempt; the bool is True when every attempt reached the
+        # cloud, False when any ``CloudUnavailable`` was caught OR a
+        # ``CloudCredentialError`` terminated the loop. Empty cycles
+        # (no pending records → no HTTP) do NOT fire — they carry no
+        # signal about cloud reachability, so the caller keeps the
+        # last known status. Used by main_window to drive the
+        # BrandedFooter's network indicator; tests pass a recorder.
+        self._on_cycle_complete = on_cycle_complete
 
     @property
     def stopped_due_to_credential_error(self) -> bool:
@@ -263,6 +274,12 @@ class SyncDaemon:
                     "sync.credential_error_stopping_daemon", reason=str(exc)
                 )
                 self._stopped_due_to_credential_error = True
+                # Surface the failure to the status hook before
+                # exiting — 401 means we reached the cloud but auth
+                # failed, which from the citizen-facing "is sync
+                # working" perspective is indistinguishable from
+                # offline. The daemon won't fire again after this.
+                self._fire_status(False)
                 return
             except OperationalError as exc:
                 # SQLite write contention with the FSM (e.g., the citizen
@@ -290,6 +307,22 @@ class SyncDaemon:
     def stop(self) -> None:
         self._stop.set()
 
+    def _fire_status(self, online: bool) -> None:
+        # Defensive try/except — a misbehaving GUI hook must not
+        # crash the daemon. The whole point of this callback is
+        # surfacing a UX status; failing the sync loop over a Qt
+        # label update would be the wrong trade.
+        if self._on_cycle_complete is None:
+            return
+        try:
+            self._on_cycle_complete(online)
+        except Exception as exc:
+            self._logger.warning(
+                "sync.on_cycle_complete_failed",
+                error_type=type(exc).__name__,
+                error=str(exc)[:200],
+            )
+
     async def run_once(self) -> None:
         """One sync pass: citizens, then sessions, then measurements.
 
@@ -301,6 +334,18 @@ class SyncDaemon:
             citizen_counts = await self._sync_citizens(session)
             session_counts = await self._sync_sessions(session)
             measurement_counts = await self._sync_measurements(session)
+
+            # Network-status signal: an HTTP attempt happened iff at
+            # least one Counter is non-empty (the ``_sync_*`` helpers
+            # short-circuit before calling the cloud when there are no
+            # rows). If every attempt landed cleanly, we're online;
+            # any ``unavailable`` entry flips to offline. Empty cycle
+            # = no signal = no callback (keep prior status).
+            all_counts = (citizen_counts, session_counts, measurement_counts)
+            attempted = any(sum(c.values()) > 0 for c in all_counts)
+            had_unavailable = any(c.get("unavailable", 0) > 0 for c in all_counts)
+            if attempted:
+                self._fire_status(not had_unavailable)
 
             record_audit(
                 session,

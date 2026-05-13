@@ -352,6 +352,107 @@ async def test_daemon_run_stops_on_credential_error(
 
 
 # ---------------------------------------------------------------------
+# on_cycle_complete callback — drives the kiosk's network indicator
+# ---------------------------------------------------------------------
+
+
+# A successful sync cycle (cloud reachable, record uploaded) fires the
+# callback with True. The bool maps to the BrandedFooter's "● Online"
+# state in production wiring.
+# Mortality: would fail if the daemon stopped calling the callback,
+# or if it called with False after a clean sync.
+@pytest.mark.asyncio
+async def test_daemon_fires_on_cycle_complete_true_on_successful_sync(
+    session_factory: sessionmaker[Session],
+    cloud_client: CloudClient,
+    db_session: Session,
+    httpx_mock: HTTPXMock,
+) -> None:
+    citizen_id = _seed_citizen(db_session)
+    httpx_mock.add_response(
+        method="POST",
+        url=f"{TEST_BASE_URL}/api/v1/sync/citizens",
+        json=ok_response_body([citizen_id], status="created"),
+        status_code=200,
+    )
+
+    received: list[bool] = []
+    daemon = SyncDaemon(
+        session_factory=session_factory,
+        cloud=cloud_client,
+        interval_seconds=30.0,
+        logger=CapturingLogger(),
+        on_cycle_complete=received.append,
+    )
+
+    await daemon.run_once()
+
+    assert received == [True]
+
+
+# When the cloud is unreachable (httpx_mock raises a connection
+# error), the daemon's per-record helpers return Counter({"unavailable": N}),
+# and on_cycle_complete fires with False — the footer flips to
+# "○ Offline".
+# Mortality: would fail if CloudUnavailable were no longer mapped to
+# the unavailable counter key, or if the False path of the callback
+# regressed.
+@pytest.mark.asyncio
+async def test_daemon_fires_on_cycle_complete_false_when_cloud_unreachable(
+    session_factory: sessionmaker[Session],
+    cloud_client: CloudClient,
+    db_session: Session,
+    httpx_mock: HTTPXMock,
+) -> None:
+    _seed_citizen(db_session)
+    httpx_mock.add_exception(
+        httpx.ConnectError("kiosk-test: cloud unreachable"),
+        method="POST",
+        url=f"{TEST_BASE_URL}/api/v1/sync/citizens",
+    )
+
+    received: list[bool] = []
+    daemon = SyncDaemon(
+        session_factory=session_factory,
+        cloud=cloud_client,
+        interval_seconds=30.0,
+        logger=CapturingLogger(),
+        on_cycle_complete=received.append,
+    )
+
+    await daemon.run_once()
+
+    assert received == [False]
+
+
+# An empty cycle (nothing to sync) must NOT fire the callback —
+# the daemon has no signal about cloud reachability when it didn't
+# make any HTTP attempt. Firing True or False would either flicker
+# a stale value into the badge or wipe the previous true state.
+# Mortality: would fail if the daemon started always firing the
+# callback, or if it fired on no-op cycles.
+@pytest.mark.asyncio
+async def test_daemon_does_not_fire_on_cycle_complete_when_no_records(
+    session_factory: sessionmaker[Session],
+    cloud_client: CloudClient,
+) -> None:
+    received: list[bool] = []
+    daemon = SyncDaemon(
+        session_factory=session_factory,
+        cloud=cloud_client,
+        interval_seconds=30.0,
+        logger=CapturingLogger(),
+        on_cycle_complete=received.append,
+    )
+
+    # No records seeded — every _sync_* short-circuits, no HTTP
+    # request, no callback.
+    await daemon.run_once()
+
+    assert received == []
+
+
+# ---------------------------------------------------------------------
 # run() loop resilience to per-cycle exceptions
 # ---------------------------------------------------------------------
 # These tests stub run_once directly so they can drive the loop's

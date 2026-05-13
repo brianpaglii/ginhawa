@@ -181,6 +181,13 @@ def main() -> int:  # pragma: no cover - hardware-bound entry point
         session_factory=session_factory,
         cloud=cloud_client,
         interval_seconds=30.0,
+        # Drive the footer's network indicator from cloud-sync
+        # reachability — citizens see "Online" only when the daemon
+        # actually pushed records or a probe-equivalent attempt
+        # succeeded this cycle. Empty cycles (no pending records)
+        # don't fire, so the badge keeps its prior state instead of
+        # flipping at every quiet tick.
+        on_cycle_complete=main_window.set_network_online,
     )
     sync_task = loop.create_task(sync_daemon.run())
 
