@@ -690,6 +690,130 @@ QCalendarWidget QWidget#qt_calendar_navigationbar {{
     min-height: 64px;
 }}
 
+/* Inline calendar picker (DOB on register form) -------------------- */
+
+/* Replaces the QDateEdit-popup variant which auto-dismissed on touch
+   under X11. Calendar is always visible inline; year and decade
+   jump buttons sit above it for fast date navigation that doesn't
+   require tapping the tiny built-in spinbox. */
+QCalendarWidget#registerDobCalendar {{
+    background-color: {background};
+    min-width: 720px;
+    min-height: 560px;
+    font-size: {body_size}px;
+}}
+
+QCalendarWidget#registerDobCalendar QToolButton {{
+    color: {text_on_primary};
+    background-color: {primary};
+    font-size: {body_size}px;
+    font-weight: 600;
+    min-height: 64px;
+    min-width: 64px;
+    margin: 4px;
+    padding: 8px 16px;
+    border-radius: 8px;
+}}
+
+QCalendarWidget#registerDobCalendar QToolButton:hover,
+QCalendarWidget#registerDobCalendar QToolButton:pressed {{
+    background-color: {primary_dark};
+}}
+
+/* The custom year-jump buttons replace the built-in QSpinBox — hide
+   it. The left/right ◀ ▶ arrows on the navigation bar remain visible
+   and drive month-by-month nav. */
+QCalendarWidget#registerDobCalendar QSpinBox {{
+    max-height: 0px;
+    max-width: 0px;
+    border: none;
+    padding: 0;
+    margin: 0;
+}}
+
+QCalendarWidget#registerDobCalendar QAbstractItemView {{
+    background-color: {background};
+    color: {text_primary};
+    selection-background-color: {primary};
+    selection-color: {text_on_primary};
+    font-size: {body_lg_size}px;
+    outline: 0;
+}}
+
+QCalendarWidget#registerDobCalendar QAbstractItemView::item {{
+    min-height: 64px;
+    min-width: 64px;
+}}
+
+QCalendarWidget#registerDobCalendar QAbstractItemView:enabled {{
+    color: {text_primary};
+}}
+
+QCalendarWidget#registerDobCalendar QAbstractItemView:disabled {{
+    color: {text_secondary};
+}}
+
+QCalendarWidget#registerDobCalendar QWidget#qt_calendar_navigationbar {{
+    background-color: {surface};
+    min-height: 80px;
+}}
+
+/* Year jump buttons — primary-filled call-to-action style. */
+QPushButton#calendarYearBackButton,
+QPushButton#calendarYearForwardButton {{
+    background-color: {primary};
+    color: {text_on_primary};
+    font-size: {body_lg_size}px;
+    font-weight: 700;
+    border: none;
+    border-radius: 12px;
+    padding: 16px 32px;
+    min-height: 80px;
+    min-width: 160px;
+}}
+
+QPushButton#calendarYearBackButton:hover,
+QPushButton#calendarYearBackButton:pressed,
+QPushButton#calendarYearForwardButton:hover,
+QPushButton#calendarYearForwardButton:pressed {{
+    background-color: {primary_dark};
+}}
+
+/* Decade jump buttons — primary-outline (secondary affordance) so the
+   year buttons read as the more common operation. */
+QPushButton#calendarDecadeBackButton,
+QPushButton#calendarDecadeForwardButton {{
+    background-color: {background};
+    color: {primary};
+    font-size: {body_lg_size}px;
+    font-weight: 700;
+    border: 2px solid {primary};
+    border-radius: 12px;
+    padding: 16px 32px;
+    min-height: 80px;
+    min-width: 160px;
+}}
+
+QPushButton#calendarDecadeBackButton:hover,
+QPushButton#calendarDecadeBackButton:pressed,
+QPushButton#calendarDecadeForwardButton:hover,
+QPushButton#calendarDecadeForwardButton:pressed {{
+    background-color: {surface};
+}}
+
+/* Selected-date readout below the calendar — gives the citizen
+   immediate confirmation that their tap registered. */
+QLabel#calendarSelectedLabel {{
+    color: {text_primary};
+    font-size: {h3_size}px;
+    font-weight: 700;
+    background-color: {surface};
+    border: 2px solid {primary};
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 8px;
+}}
+
 /* List widgets used on measuring + report screens ------------------- */
 
 QListWidget {{

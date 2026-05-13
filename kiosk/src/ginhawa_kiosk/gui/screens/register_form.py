@@ -18,6 +18,13 @@ The screen resets its inputs on every ``on_enter`` so a "Change
 language" round-trip lands on a clean form (the test
 ``test_change_language_resets_partial_register_form_data`` pins
 this).
+
+The DOB field uses :class:`_InlineCalendarPicker` — a custom
+always-visible QCalendarWidget with year and decade jump buttons.
+This replaces the previous ``QDateEdit(setCalendarPopup=True)``
+which was unreliable on the kiosk touchscreen: tapping inside the
+popup registered as a click-outside event on X11 and dismissed
+the popup before the day-cell tap landed.
 """
 
 from __future__ import annotations
@@ -27,7 +34,7 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
-    QDateEdit,
+    QCalendarWidget,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -35,6 +42,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from ..strings import Language, get_strings
@@ -48,6 +56,135 @@ class RegistrationData:
     sex: str  # 'M' | 'F' | 'O'
     barangay: str
     phone: str | None
+
+
+class _InlineCalendarPicker(QWidget):
+    """Always-visible date picker for touchscreens.
+
+    Replaces ``QDateEdit + setCalendarPopup(True)`` which is
+    unreliable on touch: the popup's child widgets register as
+    "outside" the popup hit-test region when receiving touch events
+    on X11 / xcb, so a day-cell tap dismisses the popup before the
+    selection is committed.
+
+    Layout: a decade-jump / year-jump row above the
+    :class:`QCalendarWidget`, with a "Selected: yyyy-MM-dd" label
+    below. The calendar's built-in ``◀`` / ``▶`` arrows still drive
+    month navigation; the custom buttons bypass the year QSpinBox
+    that's likewise hard to touch.
+
+    Public API mirrors the subset of :class:`QDateEdit` the form
+    consumed before: ``selectedDate()`` and ``setSelectedDate(date)``.
+    ``setSelectedDate`` clamps to the configured min/max so a
+    parent caller can't accidentally seed an out-of-range date.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("inlineCalendarPicker")
+
+        self._calendar = QCalendarWidget()
+        self._calendar.setObjectName("registerDobCalendar")
+        # Bounds: 1900 covers everyone alive; nobody is born in the
+        # future. setSelectedDate (ours) clamps incoming dates to
+        # this range so a wrong programmatic seed can't sneak past.
+        self._calendar.setMinimumDate(QDate(1900, 1, 1))
+        self._calendar.setMaximumDate(QDate.currentDate())
+        # Default to ~30 years ago — covers the adult demographic
+        # that makes up the typical kiosk user.
+        self._calendar.setSelectedDate(QDate.currentDate().addYears(-30))
+        self._calendar.setGridVisible(True)
+        self._calendar.setNavigationBarVisible(True)
+        self._calendar.setVerticalHeaderFormat(
+            QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader
+        )
+        self._calendar.setHorizontalHeaderFormat(
+            QCalendarWidget.HorizontalHeaderFormat.SingleLetterDayNames
+        )
+
+        # Year jump buttons — unique objectNames so tests can target
+        # the back / forward direction individually via findChild.
+        self._year_back = QPushButton("« Year")
+        self._year_back.setObjectName("calendarYearBackButton")
+        self._year_back.clicked.connect(self._jump_year_back)
+
+        self._year_forward = QPushButton("Year »")
+        self._year_forward.setObjectName("calendarYearForwardButton")
+        self._year_forward.clicked.connect(self._jump_year_forward)
+
+        # Decade jump buttons — for elderly users who would otherwise
+        # tap year-back 30+ times to reach a typical adult DOB.
+        self._decade_back = QPushButton("« 10 yrs")
+        self._decade_back.setObjectName("calendarDecadeBackButton")
+        self._decade_back.clicked.connect(self._jump_decade_back)
+
+        self._decade_forward = QPushButton("10 yrs »")
+        self._decade_forward.setObjectName("calendarDecadeForwardButton")
+        self._decade_forward.clicked.connect(self._jump_decade_forward)
+
+        jumps = QHBoxLayout()
+        jumps.addWidget(self._decade_back)
+        jumps.addWidget(self._year_back)
+        jumps.addStretch(1)
+        jumps.addWidget(self._year_forward)
+        jumps.addWidget(self._decade_forward)
+
+        self._selected_label = QLabel()
+        self._selected_label.setObjectName("calendarSelectedLabel")
+        self._selected_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._update_selected_label()
+        # Keep the label in sync whenever the citizen taps a day cell.
+        self._calendar.selectionChanged.connect(self._update_selected_label)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(16)
+        layout.addLayout(jumps)
+        layout.addWidget(self._calendar)
+        layout.addWidget(self._selected_label)
+
+    # ------------------------------------------------------------------
+    # Public API — mimics the slice of QDateEdit the form consumed.
+    # ------------------------------------------------------------------
+
+    def selectedDate(self) -> QDate:
+        return self._calendar.selectedDate()
+
+    def setSelectedDate(self, date: QDate) -> None:
+        # Clamp before forwarding — QCalendarWidget silently rejects
+        # out-of-range dates rather than clamping them.
+        min_date = self._calendar.minimumDate()
+        max_date = self._calendar.maximumDate()
+        if date < min_date:
+            date = min_date
+        elif date > max_date:
+            date = max_date
+        self._calendar.setSelectedDate(date)
+        self._update_selected_label()
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _jump_year_back(self) -> None:
+        self._jump_years(-1)
+
+    def _jump_year_forward(self) -> None:
+        self._jump_years(1)
+
+    def _jump_decade_back(self) -> None:
+        self._jump_years(-10)
+
+    def _jump_decade_forward(self) -> None:
+        self._jump_years(10)
+
+    def _jump_years(self, delta: int) -> None:
+        # Delegate clamping to setSelectedDate so the year buttons
+        # can't push the selection outside [min, max] either.
+        self.setSelectedDate(self._calendar.selectedDate().addYears(delta))
+
+    def _update_selected_label(self) -> None:
+        date = self._calendar.selectedDate()
+        self._selected_label.setText(f"Selected: {date.toString('yyyy-MM-dd')}")
 
 
 class RegisterFormScreen(BaseScreen):
@@ -68,19 +205,11 @@ class RegisterFormScreen(BaseScreen):
         # Form fields
         self._name_input = QLineEdit()
         self._name_input.setObjectName("register_name_input")
-        self._dob_input = QDateEdit()
+        # DOB uses an inline always-visible calendar — the popup
+        # version (QDateEdit + setCalendarPopup) dismissed on tap
+        # under X11 touch events. See _InlineCalendarPicker docstring.
+        self._dob_input = _InlineCalendarPicker()
         self._dob_input.setObjectName("register_dob_input")
-        self._dob_input.setCalendarPopup(True)
-        self._dob_input.setDisplayFormat("yyyy-MM-dd")
-        # Bounds: 1900 covers everyone alive; nobody is born in the
-        # future. Qt clamps setDate() to this range automatically, so
-        # the BHW can't accidentally enter an impossible DOB.
-        self._dob_input.setMinimumDate(QDate(1900, 1, 1))
-        self._dob_input.setMaximumDate(QDate.currentDate())
-        # Default to ~30 years ago — covers the adult demographic that
-        # makes up the typical kiosk user. BHWs adjust via the
-        # calendar popup; the year header lets them jump by decade.
-        self._dob_input.setDate(QDate.currentDate().addYears(-30))
         self._barangay_input = QLineEdit()
         self._barangay_input.setObjectName("register_barangay_input")
         self._phone_input = QLineEdit()
@@ -117,11 +246,6 @@ class RegisterFormScreen(BaseScreen):
         self._barangay_label = QLabel()
         self._phone_label = QLabel()
 
-        # Form layout
-        form = QFormLayout()
-        form.addRow(self._name_label, self._name_input)
-        form.addRow(self._dob_label, self._dob_input)
-
         # Each radio gets an equal third of the form width so the
         # styled rounded tap target stretches across; the trailing
         # stretch is intentionally NOT used (it would collapse the
@@ -132,16 +256,35 @@ class RegisterFormScreen(BaseScreen):
         sex_row.addWidget(self._sex_male, 1)
         sex_row.addWidget(self._sex_female, 1)
         sex_row.addWidget(self._sex_other, 1)
-        form.addRow(self._sex_label, sex_row)
 
-        form.addRow(self._barangay_label, self._barangay_input)
-        form.addRow(self._phone_label, self._phone_input)
+        # The QFormLayout (label-left, field-right) is great for one-
+        # line inputs but ugly when one of the fields is a 720x560
+        # inline calendar — the label column gets squished. So the
+        # DOB block lives in its own vertical sub-layout above the
+        # remaining form-style rows, while Name keeps the QFormLayout
+        # treatment for visual consistency with Sex / Barangay / Phone.
+        name_form = QFormLayout()
+        name_form.addRow(self._name_label, self._name_input)
+
+        dob_section = QVBoxLayout()
+        dob_section.setSpacing(12)
+        dob_section.addWidget(self._dob_label)
+        dob_section.addWidget(self._dob_input)
+
+        rest_form = QFormLayout()
+        rest_form.addRow(self._sex_label, sex_row)
+        rest_form.addRow(self._barangay_label, self._barangay_input)
+        rest_form.addRow(self._phone_label, self._phone_input)
 
         layout = QVBoxLayout()
         layout.addWidget(self._title)
         layout.addWidget(self._intro)
-        layout.addSpacing(20)
-        layout.addLayout(form)
+        layout.addSpacing(16)
+        layout.addLayout(name_form)
+        layout.addSpacing(12)
+        layout.addLayout(dob_section)
+        layout.addSpacing(12)
+        layout.addLayout(rest_form)
         layout.addWidget(self._error_label)
         layout.addStretch(1)
         layout.addWidget(self._submit_button, alignment=Qt.AlignmentFlag.AlignRight)
@@ -181,7 +324,7 @@ class RegisterFormScreen(BaseScreen):
         # "Change language" round-trip lands on the same starting
         # state, not a hard-coded year that drifts off the typical
         # adult kiosk user as time passes.
-        self._dob_input.setDate(QDate.currentDate().addYears(-30))
+        self._dob_input.setSelectedDate(QDate.currentDate().addYears(-30))
         self._barangay_input.setText(self._default_barangay)
         self._phone_input.clear()
         self._sex_group.setExclusive(False)
@@ -221,7 +364,7 @@ class RegisterFormScreen(BaseScreen):
             return
 
         assert sex is not None  # narrowed above
-        dob_iso = self._dob_input.date().toString("yyyy-MM-dd")
+        dob_iso = self._dob_input.selectedDate().toString("yyyy-MM-dd")
         phone_raw = self._phone_input.text().strip()
         data = RegistrationData(
             full_name=name,
