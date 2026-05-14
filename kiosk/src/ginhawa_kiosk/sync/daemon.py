@@ -41,7 +41,7 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -139,43 +139,83 @@ def _measurement_to_wire(m: Measurement) -> MeasurementSync:
 # ---------------------------------------------------------------------------
 
 
-def _fetch_unsynced_citizens(session: Session, limit: int) -> list[Citizen]:
-    return list(
+# ADR-0024 watermark predicate. A row is pending sync iff it has
+# never been synced (``last_synced_at IS NULL``) or its current
+# ``updated_at`` is newer than the last sync stamp. The legacy
+# ``synced`` column is no longer consulted here — it remains in
+# the schema for backward compat with any reader that hasn't
+# migrated, but is deprecated and slated for removal in a
+# follow-up PR.
+#
+# The fetch returns ``(row, updated_at_at_fetch)`` tuples. The
+# captured timestamp is what ``_apply_results`` stamps to
+# ``last_synced_at`` after a successful upload — NOT the row's
+# current ``updated_at`` at stamp time, which may have been
+# mutated by a concurrent FSM transition between fetch and stamp.
+# Capturing-at-fetch is what makes the design race-free; the
+# next cycle's predicate ``last_synced_at < updated_at`` will
+# correctly re-select a row that was mutated mid-roundtrip.
+
+
+def _fetch_pending_citizens(session: Session, limit: int) -> list[tuple[Citizen, str]]:
+    rows = list(
         session.execute(
             select(Citizen)
-            .where(Citizen.synced == 0)
+            .where(
+                or_(
+                    Citizen.last_synced_at.is_(None),
+                    Citizen.last_synced_at < Citizen.updated_at,
+                )
+            )
             .order_by(Citizen.registered_at)
             .limit(limit)
         )
         .scalars()
         .all()
     )
+    return [(row, row.updated_at) for row in rows]
 
 
-def _fetch_unsynced_sessions(session: Session, limit: int) -> list[SessionModel]:
-    return list(
+def _fetch_pending_sessions(
+    session: Session, limit: int
+) -> list[tuple[SessionModel, str]]:
+    rows = list(
         session.execute(
             select(SessionModel)
-            .where(SessionModel.synced == 0)
+            .where(
+                or_(
+                    SessionModel.last_synced_at.is_(None),
+                    SessionModel.last_synced_at < SessionModel.updated_at,
+                )
+            )
             .order_by(SessionModel.started_at)
             .limit(limit)
         )
         .scalars()
         .all()
     )
+    return [(row, row.updated_at) for row in rows]
 
 
-def _fetch_unsynced_measurements(session: Session, limit: int) -> list[Measurement]:
-    return list(
+def _fetch_pending_measurements(
+    session: Session, limit: int
+) -> list[tuple[Measurement, str]]:
+    rows = list(
         session.execute(
             select(Measurement)
-            .where(Measurement.synced == 0)
+            .where(
+                or_(
+                    Measurement.last_synced_at.is_(None),
+                    Measurement.last_synced_at < Measurement.updated_at,
+                )
+            )
             .order_by(Measurement.measured_at)
             .limit(limit)
         )
         .scalars()
         .all()
     )
+    return [(row, row.updated_at) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -186,11 +226,24 @@ def _fetch_unsynced_measurements(session: Session, limit: int) -> list[Measureme
 def _apply_results(
     session: Session,
     rows_by_id: dict[str, Any],
+    fetch_ts_by_id: dict[str, str],
     response: BatchSyncResponse,
     type_label: str,
     logger: Any,
 ) -> Counter[str]:
-    """Apply per-record results to local rows. Return outcome counts."""
+    """Apply per-record results to local rows. Return outcome counts.
+
+    On terminal-OK statuses, stamps ``last_synced_at`` to the
+    ``updated_at`` value the row had AT FETCH TIME (per
+    ``fetch_ts_by_id``). If concurrent FSM activity bumped the
+    row's ``updated_at`` after fetch, the predicate
+    ``last_synced_at < updated_at`` will pick the row up on the
+    next cycle — race-free. ADR-0024.
+
+    ``synced=1`` is still set alongside the watermark stamp.
+    The daemon's row-selection no longer reads ``synced``, but
+    legacy callers may; we'll drop it in a follow-up PR.
+    """
     counts: Counter[str] = Counter()
     for result in response.results:
         counts[result.status] += 1
@@ -206,12 +259,16 @@ def _apply_results(
             )
             continue
         if result.status in _TERMINAL_OK_STATUSES:
-            row.synced = 1
+            row.synced = 1  # legacy; deprecated, see ADR-0024
+            row.last_synced_at = fetch_ts_by_id[result.id]
         else:
-            # conflict_constraint or rejected — leave synced=0 so the
-            # operator can investigate and the daemon will retry on
-            # the next cycle (where it will likely fail the same way
-            # until the underlying issue is fixed).
+            # conflict_constraint or rejected — leave the watermark
+            # unstamped so the daemon will retry on the next cycle
+            # (where it will likely fail the same way until the
+            # underlying issue is fixed). ``synced`` likewise stays
+            # at its current value (0 for never-synced rows, or 1
+            # for previously-synced rows whose subsequent update
+            # the cloud is now rejecting).
             logger.warning(
                 "sync.record_not_uploaded",
                 type=type_label,
@@ -377,9 +434,11 @@ class SyncDaemon:
     # ---- per-type cycle helpers ---------------------------------------
 
     async def _sync_citizens(self, session: Session) -> Counter[str]:
-        rows = _fetch_unsynced_citizens(session, _BATCH_LIMIT)
-        if not rows:
+        fetched = _fetch_pending_citizens(session, _BATCH_LIMIT)
+        if not fetched:
             return Counter()
+        rows = [row for row, _ts in fetched]
+        fetch_ts_by_id = {row.id: ts for row, ts in fetched}
         wire = [_citizen_to_wire(r) for r in rows]
         try:
             response = await self._cloud.sync_citizens(wire)
@@ -394,15 +453,18 @@ class SyncDaemon:
         return _apply_results(
             session,
             {r.id: r for r in rows},
+            fetch_ts_by_id,
             response,
             type_label="citizen",
             logger=self._logger,
         )
 
     async def _sync_sessions(self, session: Session) -> Counter[str]:
-        rows = _fetch_unsynced_sessions(session, _BATCH_LIMIT)
-        if not rows:
+        fetched = _fetch_pending_sessions(session, _BATCH_LIMIT)
+        if not fetched:
             return Counter()
+        rows = [row for row, _ts in fetched]
+        fetch_ts_by_id = {row.id: ts for row, ts in fetched}
         wire = [_session_to_wire(r, self._cloud.device_id) for r in rows]
         try:
             response = await self._cloud.sync_sessions(wire)
@@ -417,15 +479,18 @@ class SyncDaemon:
         return _apply_results(
             session,
             {r.id: r for r in rows},
+            fetch_ts_by_id,
             response,
             type_label="session",
             logger=self._logger,
         )
 
     async def _sync_measurements(self, session: Session) -> Counter[str]:
-        rows = _fetch_unsynced_measurements(session, _BATCH_LIMIT)
-        if not rows:
+        fetched = _fetch_pending_measurements(session, _BATCH_LIMIT)
+        if not fetched:
             return Counter()
+        rows = [row for row, _ts in fetched]
+        fetch_ts_by_id = {row.id: ts for row, ts in fetched}
         wire = [_measurement_to_wire(r) for r in rows]
         try:
             response = await self._cloud.sync_measurements(wire)
@@ -440,6 +505,7 @@ class SyncDaemon:
         return _apply_results(
             session,
             {r.id: r for r in rows},
+            fetch_ts_by_id,
             response,
             type_label="measurement",
             logger=self._logger,

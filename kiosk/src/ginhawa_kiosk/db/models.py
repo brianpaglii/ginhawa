@@ -86,8 +86,16 @@ class Citizen(Base):
     is_active: Mapped[int] = mapped_column(default=1)
     synced: Mapped[int] = mapped_column(default=0)
     updated_at: Mapped[str] = mapped_column(default=_utc_now_iso)
-
-    sessions: Mapped[list["Session"]] = relationship(back_populates="citizen")
+    # ADR-0024 sync watermark. NULL means "never synced"; otherwise
+    # holds the row's ``updated_at`` value at the moment the daemon
+    # last fetched it for upload (race-free: not the current
+    # ``updated_at``, which may have been bumped by concurrent FSM
+    # mutations between fetch and stamp). The daemon's pending-row
+    # query is ``last_synced_at IS NULL OR last_synced_at <
+    # updated_at`` — citizens are append-only on the kiosk today so
+    # the column never re-fires after first sync, but the predicate
+    # is uniform across all three synced tables.
+    last_synced_at: Mapped[str | None] = mapped_column(default=None)
 
 
 class Session(Base):
@@ -124,8 +132,12 @@ class Session(Base):
     printed_status: Mapped[str] = mapped_column(default="not_requested")
     synced: Mapped[int] = mapped_column(default=0)
     updated_at: Mapped[str] = mapped_column(default=_utc_now_iso)
-
-    citizen: Mapped["Citizen"] = relationship(back_populates="sessions")
+    # ADR-0024 sync watermark — see Citizen.last_synced_at.
+    # Sessions are the table that motivated the watermark: the FSM
+    # mutates status / ended_at / printed_status / measurement_path
+    # post-creation and the old WHERE synced=0 predicate missed
+    # every one of those updates.
+    last_synced_at: Mapped[str | None] = mapped_column(default=None)
     measurements: Mapped[list["Measurement"]] = relationship(
         back_populates="session", passive_deletes=True
     )
@@ -160,6 +172,8 @@ class Measurement(Base):
     raw_json: Mapped[str | None] = mapped_column()
     synced: Mapped[int] = mapped_column(default=0)
     updated_at: Mapped[str] = mapped_column(default=_utc_now_iso)
+    # ADR-0024 sync watermark — see Citizen.last_synced_at.
+    last_synced_at: Mapped[str | None] = mapped_column(default=None)
 
     session: Mapped["Session"] = relationship(back_populates="measurements")
 
