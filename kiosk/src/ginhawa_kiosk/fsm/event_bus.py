@@ -108,6 +108,17 @@ class MeasurementProposed(Event):
     source_device: str
     claimed_is_valid: bool
     validation_notes: str | None = None
+    # UTC ISO-8601 receipt timestamp from the MQTT subscriber (or
+    # equivalent stamping point in non-MQTT adapters). Consumed by
+    # the kiosk's SpO2 session-floor gate (ADR-0023) to drop
+    # readings whose receipt predates MEASURING_VITALS entry by
+    # more than a small skew tolerance. ``None`` is the legacy
+    # default — adapters that don't stamp leave it unset and the
+    # gate treats them as exempt (BP has its own session_floor in
+    # the sensor adapter via ADR-0020; offline placeholders and
+    # mock sensors don't need a floor). Audit:
+    # ``docs/audits/2026-05-14-spo2-stale-readings-audit.md``.
+    captured_at: str | None = None
 
 
 class LiveTemperatureUpdate(Event):

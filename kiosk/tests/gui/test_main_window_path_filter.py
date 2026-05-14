@@ -240,6 +240,13 @@ async def test_full_check_accepts_all(
     assert fsm.current_session is not None
     session_id = fsm.current_session.id
 
+    # SpO2's receipt-boundary session_floor gate (ADR-0023) requires
+    # the MQTT-stamped captured_at — for the kiosk-stamped fake we
+    # use "now" so it sits at the floor, well inside the skew.
+    from datetime import datetime, timezone
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     payloads: list[tuple[str, float, str, str]] = [
         ("systolic_bp", 128.0, "mmHg", "omron_hem7155t"),
         ("diastolic_bp", 82.0, "mmHg", "omron_hem7155t"),
@@ -257,6 +264,7 @@ async def test_full_check_accepts_all(
                 unit=unit,
                 source_device=source,
                 claimed_is_valid=True,
+                captured_at=now_iso if measurement_type == "spo2" else None,
             )
         )
 

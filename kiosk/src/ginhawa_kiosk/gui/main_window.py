@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -114,6 +114,19 @@ _MEASUREMENT_LABELS: dict[Language, dict[str, str]] = {
 # transitions should be triggered automatically as readings arrive.
 _VITALS_TYPES = {"systolic_bp", "diastolic_bp", "heart_rate", "spo2", "temperature"}
 _ANTHRO_TYPES = {"height", "weight"}
+
+
+# Skew tolerance for the SpO2 receipt-boundary session-floor gate
+# (ADR-0023). MQTT publishes are stamped with ``captured_at`` at
+# subscriber-receipt time; the session floor is stamped at the
+# kiosk's MEASURING_VITALS entry. The same asyncio loop schedules
+# both so the gap is sub-second in practice, but QoS-1 retries and
+# the firmware's 100 ms internal scheduling can push the gap to
+# several seconds. 10 s is comfortably larger than any observed
+# in-loop scheduling gap and smaller than the firmware's 30 s
+# publish cadence — a publish stamped more than 10 s before the
+# floor is decisively pre-session.
+_SPO2_SESSION_FLOOR_SKEW_S = 10.0
 
 
 def _is_measurement_allowed_for_path(
@@ -385,6 +398,16 @@ class KioskMainWindow(QMainWindow):
         # duplicate and gets dropped.
         self._captured_real_types: set[str] = set()
 
+        # SpO2 receipt-boundary session-floor (ADR-0023). Stamped on
+        # entry to MEASURING_VITALS, cleared on exit. While set,
+        # _on_measurement_proposed_event rejects any spo2
+        # MeasurementProposed whose captured_at is more than
+        # _SPO2_SESSION_FLOOR_SKEW_S seconds before the floor — a
+        # publish that predates the kiosk's session entry cannot
+        # reflect the current citizen. Audit:
+        # docs/audits/2026-05-14-spo2-stale-readings-audit.md.
+        self._spo2_session_floor: datetime | None = None
+
         self._wire_signals()
 
         # Initial state is IDLE; render its content.
@@ -475,10 +498,38 @@ class KioskMainWindow(QMainWindow):
         self._captured_types.clear()
         self._captured_real_types.clear()
         self._maybe_publish_bp_cancellation(self._previous_state, state)
+        self._update_spo2_session_floor(self._previous_state, state)
         self._configure_state_specific(state, snapshot, active_language)
         self._configure_state_timeout(state)
         self._maybe_publish_session_reset(state)
         self._previous_state = state
+
+    def _update_spo2_session_floor(
+        self, prev_state: str | None, new_state: str
+    ) -> None:
+        """Stamp / clear the SpO2 session_floor across MEASURING_VITALS
+        boundaries (ADR-0023). Sibling of the BP cancellation hook —
+        the SpO2 gate fires from the kiosk's receipt boundary rather
+        than from a sensor adapter, so the floor lives here on the
+        main window rather than on the OmronBpSensor."""
+        entering = (
+            new_state == State.MEASURING_VITALS and prev_state != State.MEASURING_VITALS
+        )
+        leaving = (
+            prev_state == State.MEASURING_VITALS and new_state != State.MEASURING_VITALS
+        )
+        if entering:
+            self._spo2_session_floor = datetime.now(timezone.utc)
+            _log.info(
+                "main_window.spo2_session_floor_set",
+                session_floor=self._spo2_session_floor.isoformat(),
+            )
+        elif leaving and self._spo2_session_floor is not None:
+            _log.info(
+                "main_window.spo2_session_floor_cleared",
+                session_floor=self._spo2_session_floor.isoformat(),
+            )
+            self._spo2_session_floor = None
 
     def _maybe_publish_bp_cancellation(
         self, prev_state: str | None, new_state: str
@@ -969,6 +1020,63 @@ class KioskMainWindow(QMainWindow):
                 session_id=self._fsm.current_session.id,
             )
             return
+
+        # SpO2 receipt-boundary session-floor (ADR-0023). Defence-
+        # in-depth on top of the firmware finger-presence gate
+        # (ADR-0022): drop spo2 readings whose MQTT-stamped
+        # captured_at predates the current MEASURING_VITALS entry
+        # by more than the skew tolerance. Catches the in-flight /
+        # QoS-1 retry / pre-session-publish edge cases the firmware
+        # gate doesn't see. Only applies to spo2 (the other vitals
+        # types are gated elsewhere — BP at the sensor adapter,
+        # height with stabilisation, temperature via Capture button),
+        # to real (is_valid=1) readings (offline placeholders carry
+        # no captured_at and need to pass through), and only when a
+        # floor is set (it's stamped only inside MEASURING_VITALS).
+        # Audit:
+        # docs/audits/2026-05-14-spo2-stale-readings-audit.md.
+        if (
+            event.measurement_type == "spo2"
+            and is_valid_int == 1
+            and self._spo2_session_floor is not None
+        ):
+            captured_at_raw = event.captured_at
+            if captured_at_raw is None:
+                _log.warning(
+                    "main_window.spo2_captured_at_missing",
+                    source_device=event.source_device,
+                )
+                return
+            try:
+                # Accept the "Z" suffix as a UTC marker for forward
+                # compat — current MQTT subscriber stamps "+00:00"
+                # but a future firmware NTP path might emit "Z".
+                captured_at_dt = datetime.fromisoformat(
+                    captured_at_raw.replace("Z", "+00:00")
+                )
+            except (TypeError, ValueError) as exc:
+                _log.warning(
+                    "main_window.spo2_captured_at_parse_failed",
+                    captured_at=str(captured_at_raw),
+                    error=str(exc),
+                )
+                return
+            if captured_at_dt.tzinfo is None:
+                captured_at_dt = captured_at_dt.replace(tzinfo=timezone.utc)
+            floor_minus_skew = self._spo2_session_floor - timedelta(
+                seconds=_SPO2_SESSION_FLOOR_SKEW_S
+            )
+            if captured_at_dt < floor_minus_skew:
+                _log.warning(
+                    "main_window.spo2_pre_session_floor_dropped",
+                    captured_at=captured_at_dt.isoformat(),
+                    session_floor=self._spo2_session_floor.isoformat(),
+                    delta_to_floor_s=(
+                        captured_at_dt - self._spo2_session_floor
+                    ).total_seconds(),
+                    source_device=event.source_device,
+                )
+                return
 
         # Drop a duplicate REAL reading. Each measurement type is
         # recorded at most once per session — second weights, second

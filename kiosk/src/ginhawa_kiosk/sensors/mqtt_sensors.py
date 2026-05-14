@@ -324,11 +324,15 @@ async def _emit_for_payload(
             LiveTemperatureUpdate(value=value, unit=unit, captured_at=captured_at)
         )
         return
-    await _route_to_event(bus, topic_suffix, value, unit)
+    await _route_to_event(bus, topic_suffix, value, unit, captured_at)
 
 
 async def _route_to_event(
-    bus: EventBus, topic_suffix: str, value: float, unit: str
+    bus: EventBus,
+    topic_suffix: str,
+    value: float,
+    unit: str,
+    captured_at: str,
 ) -> None:
     measurement_type, _expected_unit, source_device = _TOPIC_ROUTES[topic_suffix]
     await bus.publish(
@@ -338,5 +342,6 @@ async def _route_to_event(
             unit=unit,
             source_device=source_device,
             claimed_is_valid=True,
+            captured_at=captured_at,
         )
     )
