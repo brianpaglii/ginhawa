@@ -65,6 +65,26 @@ def create_engine_for_kiosk(db_path: Path, key: str) -> Engine:
         cursor = dbapi_conn.cursor()
         try:
             cursor.execute("PRAGMA foreign_keys = ON")
+            # WAL journal mode: readers and writers don't block each
+            # other, and the EXCLUSIVE lock of the default DELETE mode
+            # is replaced by a short locking handshake on commit. The
+            # kiosk runs two SQLAlchemy sessions backed by this engine
+            # (main-app + sync daemon); without WAL their occasional
+            # overlap surfaces as ``SQLITE_BUSY``. SQLCipher supports
+            # WAL natively. Side files (``kiosk.db-wal`` /
+            # ``kiosk.db-shm``) live alongside the main DB on the
+            # same filesystem; backup scripts must include all three
+            # or call ``PRAGMA wal_checkpoint(TRUNCATE)`` first. ADR-0021.
+            cursor.execute("PRAGMA journal_mode = WAL")
+            # busy_timeout: SQLite internally retries SQLITE_BUSY for
+            # up to this many milliseconds before raising. 5000 ms
+            # comfortably absorbs the longest observed contention
+            # window (the REPORT screen, capped at 60 s by the auto-
+            # timeout but typically sub-second). The sync daemon's
+            # ``except OperationalError`` block stays as defence-in-
+            # depth for genuine >5 s deadlocks. Audit:
+            # ``docs/audits/2026-05-14-db-lock-contention-audit.md``.
+            cursor.execute("PRAGMA busy_timeout = 5000")
         finally:
             cursor.close()
 

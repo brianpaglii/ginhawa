@@ -305,3 +305,50 @@ pairing mode mid-handshake.
 The button is also re-enabled on every entry to `MEASURING_VITALS`,
 so a citizen who started a fresh session always sees an active
 button regardless of prior state.
+
+## Backing up the encrypted database
+
+The kiosk SQLite database runs in **WAL** journal mode (per
+ADR-0021, applied at every connection by the `_on_connect` hook
+in [`kiosk/src/ginhawa_kiosk/db/session.py`](../src/ginhawa_kiosk/db/session.py)).
+WAL stores in-flight transactions in side files alongside the
+main database. A backup that copies only the main `.db` will be
+silently incomplete — any commits not yet checkpointed live in
+the `-wal` file.
+
+To back up the encrypted database, **copy all three files**:
+
+```
+/var/lib/ginhawa/kiosk.db
+/var/lib/ginhawa/kiosk.db-wal
+/var/lib/ginhawa/kiosk.db-shm
+```
+
+Alternatively, flatten the WAL into the main DB first and then
+copy just `kiosk.db`:
+
+```bash
+echo "PRAGMA key='<your-key>'; PRAGMA wal_checkpoint(TRUNCATE);" \
+  | sudo sqlcipher /var/lib/ginhawa/kiosk.db
+sudo cp /var/lib/ginhawa/kiosk.db /backup/location/
+```
+
+The `wal_checkpoint(TRUNCATE)` form rewrites pending transactions
+into the main file and truncates the WAL to zero bytes, so a
+subsequent single-file copy captures everything. Run this with
+the kiosk service stopped to avoid racing a concurrent write.
+
+To verify the database is actually in WAL mode at runtime:
+
+```bash
+echo "PRAGMA key='<your-key>'; PRAGMA journal_mode; PRAGMA busy_timeout;" \
+  | sudo sqlcipher /var/lib/ginhawa/kiosk.db
+# Expected output:
+# wal
+# 5000
+```
+
+See [`docs/audits/2026-05-14-db-lock-contention-audit.md`](../../docs/audits/2026-05-14-db-lock-contention-audit.md)
+for the contention pattern that motivated the WAL choice and
+[`docs/decisions/0021-sqlite-wal-and-busy-timeout.md`](../../docs/decisions/0021-sqlite-wal-and-busy-timeout.md)
+for the decision record.
