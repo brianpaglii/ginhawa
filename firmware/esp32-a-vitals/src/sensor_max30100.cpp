@@ -29,6 +29,25 @@ PulseOximeter g_pox;
 float g_spo2_buf[MAX30100_SAMPLE_BUFFER];
 int g_spo2_count = 0;
 
+// Finger-presence gate state (ADR-0022 / audit
+// docs/audits/2026-05-14-spo2-stale-readings-audit.md). The OXullo
+// library memoises last SpO2 across finger-off; without a presence
+// gate the firmware silently re-publishes session 1's reading into
+// session 2. State is module-scope so a single-tick "no finger" check
+// can both reset the warmup counter and clear the accumulating SpO2
+// buffer — brief finger removal must invalidate any in-progress
+// accumulation, not just stop adding to it.
+unsigned long g_last_finger_check_ms = 0;
+uint16_t g_finger_check_count = 0;
+bool g_finger_warmed_up = false;
+unsigned long g_last_spo2_publish_ms = 0;
+
+// MAX30100 I²C address + FIFO_DATA register (same constants the
+// diagnostic dump hard-codes inline). Hoisted to namespace scope so
+// the production gate's raw-IR read shares them with the diagnostic.
+constexpr uint8_t kMax30100Addr = 0x57;
+constexpr uint8_t kFifoDataReg = 0x05;
+
 // Append-with-overwrite: when full, drop the oldest sample so the
 // median tracks recent state instead of an old fixed window.
 void _push(float* buf, int& count, float value) {
@@ -40,6 +59,34 @@ void _push(float* buf, int& count, float value) {
         buf[i] = buf[i + 1];
     }
     buf[MAX30100_SAMPLE_BUFFER - 1] = value;
+}
+
+// Read one raw IR sample directly from the chip's FIFO_DATA register.
+// Mirrors the I²C accessor the diagnostic dump uses
+// (sensor_max30100_diagnostic_dump). Returns -1 on I²C failure,
+// otherwise the 16-bit IR value (0–65535).
+//
+// DESTRUCTIVE: this pops a sample from the chip's FIFO that the
+// library's update() would otherwise consume. Throttled by the
+// caller (sensor_max30100_tick) to ~100 ms cadence so the library
+// retains ~90 % of the 100 Hz sample stream — enough headroom for
+// the beat detector to stay reliable.
+int _read_raw_ir_destructive() {
+    Wire.beginTransmission(kMax30100Addr);
+    Wire.write(kFifoDataReg);
+    if (Wire.endTransmission(false) != 0) return -1;
+    // Each FIFO sample is 4 bytes: IR_MSB, IR_LSB, RED_MSB, RED_LSB.
+    // We need only IR; discard the red bytes so the FIFO read pointer
+    // advances by exactly one sample.
+    if (Wire.requestFrom(static_cast<int>(kMax30100Addr),
+                         static_cast<int>(4)) != 4) {
+        return -1;
+    }
+    uint8_t hi = Wire.read();
+    uint8_t lo = Wire.read();
+    (void)Wire.read();  // RED_MSB
+    (void)Wire.read();  // RED_LSB
+    return (static_cast<int>(hi) << 8) | lo;
 }
 }  // namespace
 
@@ -69,11 +116,49 @@ bool sensor_max30100_init(TwoWire& /*bus*/) {
 }
 
 void sensor_max30100_tick() {
+    // Finger-presence gate (ADR-0022). Throttled FIFO_DATA peek
+    // checks whether the chip is actually seeing a finger, gated on
+    // IR DC level and a 5-check warmup. Below-threshold (or I²C
+    // failure) resets warmup AND clears the accumulating buffer —
+    // brief finger removal must invalidate in-progress accumulation,
+    // not just stop adding to it.
+    unsigned long now = millis();
+    if (now - g_last_finger_check_ms >= MAX30100_FINGER_CHECK_INTERVAL_MS) {
+        g_last_finger_check_ms = now;
+        int ir = _read_raw_ir_destructive();
+        if (ir < 0 || static_cast<float>(ir) < MAX30100_FINGER_IR_THRESHOLD) {
+            if (g_finger_warmed_up) {
+                Serial.println("[max30100] finger lost, gate reset");
+            }
+            g_finger_check_count = 0;
+            g_finger_warmed_up = false;
+            g_spo2_count = 0;
+        } else if (!g_finger_warmed_up) {
+            g_finger_check_count++;
+            if (g_finger_check_count >= MAX30100_FINGER_WARMUP_CHECKS) {
+                g_finger_warmed_up = true;
+                Serial.println("[max30100] finger warmed up, gate open");
+            }
+        }
+    }
+
+    // Always drive the library — its beat detector must consume
+    // samples at the chip's 100 Hz rate to stay locked. Skipping
+    // update() between gate checks would discard 10 samples worth
+    // of state and break SpO2 calculation.
     g_pox.update();
+
+    if (!g_finger_warmed_up) {
+        return;
+    }
+
     float spo2 = g_pox.getSpO2();
     // The library returns 0.0 until it has stabilised; the SPO2_MIN
     // floor culls those startup values plus any grossly out-of-range
-    // readings the algorithm emits during finger-on transients.
+    // readings the algorithm emits during finger-on transients. With
+    // the finger-presence gate above, this filter now serves as a
+    // second line of defence rather than the primary stale-value
+    // suppressor.
     if (spo2 >= SPO2_MIN && spo2 <= SPO2_MAX) {
         _push(g_spo2_buf, g_spo2_count, spo2);
     }
@@ -227,12 +312,28 @@ VitalsReading sensor_max30100_consume_stable() {
     // Heartbeat per reporting window — silent windows otherwise look
     // identical to a dead chip on the serial monitor, since the
     // publish-path Serial.printf only fires when the threshold is met.
-    Serial.printf("MAX30100 window: spo2=%d/%d\n",
-                  g_spo2_count, MAX30100_MIN_BUFFERED_SAMPLES);
+    Serial.printf("MAX30100 window: spo2=%d/%d warm=%d\n", g_spo2_count,
+                  MAX30100_MIN_BUFFERED_SAMPLES,
+                  g_finger_warmed_up ? 1 : 0);
     VitalsReading r{false, 0.0f};
+
+    // Post-publish cooldown (ADR-0022 gate 3). After a successful
+    // publish, suppress the next one for COOLDOWN_MS regardless of
+    // buffer contents. Drops any samples accumulated during the
+    // cooldown so a fresh window starts clean after it elapses.
+    unsigned long now = millis();
+    if (g_last_spo2_publish_ms > 0 &&
+        (now - g_last_spo2_publish_ms) < MAX30100_POST_PUBLISH_COOLDOWN_MS) {
+        g_spo2_count = 0;
+        return r;
+    }
+
     if (g_spo2_count >= MAX30100_MIN_BUFFERED_SAMPLES) {
         r.spo2 = compute_pulse_median(g_spo2_buf, g_spo2_count);
         r.has_spo2 = true;
+        g_last_spo2_publish_ms = now;
+        Serial.printf("[max30100] published spo2=%.1f\n",
+                      static_cast<double>(r.spo2));
     }
     // Reset every window even if the threshold wasn't met, so a long
     // settling period at session start can't poison later windows

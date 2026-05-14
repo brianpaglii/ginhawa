@@ -46,6 +46,56 @@ constexpr int MAX30100_MIN_BUFFERED_SAMPLES = 16;
 // don't tilt the median.
 constexpr int MAX30100_SAMPLE_BUFFER = 64;
 
+// --- Finger-presence gate (ADR-0022) ---------------------------------
+// The OXullo PulseOximeter library memoises its last computed SpO2 —
+// once stable, getSpO2() keeps returning that value even after the
+// finger is removed, and it also produces plausible 90-98% readings
+// from ambient light reflecting off the M5Stack shroud. Without a
+// finger-presence gate the firmware silently re-publishes session 1's
+// reading into session 2 (audit:
+// docs/audits/2026-05-14-spo2-stale-readings-audit.md).
+//
+// The gate uses the raw IR DC level from a direct I²C FIFO_DATA peek
+// — the only finger-evidence the chip exposes through the library
+// boundary, mirroring the accessor the diagnostic dump uses. Three
+// layered checks: IR threshold, warmup window, post-publish cooldown.
+//
+// FIFO peeks are destructive (each read pops a sample the library
+// would have consumed). We throttle the gate to CHECK_INTERVAL_MS
+// cadence so the library still receives ~90% of the chip's 100 Hz
+// stream — its beat detector tolerates this rate easily, and the
+// warmup remains a 500 ms wall-clock budget against finger-arrival.
+
+// Minimum raw IR sample level (16-bit ADC counts) that the chip
+// reports when a citizen's finger is on the sensor. Bench-calibrate
+// per fixture: with no finger expect ≤ 15000; with finger pressed
+// expect 50000-200000. 30000 sits comfortably between the two on
+// the bench breadboard with the current M5Stack shroud — re-tune for
+// future deployments if needed.
+constexpr float MAX30100_FINGER_IR_THRESHOLD = 30000.0f;
+
+// Throttle for the gate's destructive FIFO_DATA read. The library's
+// update() also reads the FIFO, at every 10 ms tick. Reading at 10 ms
+// cadence here would fight the library for every sample; 100 ms gives
+// the library ~9 of every 10 samples and keeps gate sample-loss at
+// 10%, well inside the beat detector's tolerance.
+constexpr unsigned long MAX30100_FINGER_CHECK_INTERVAL_MS = 100;
+
+// Number of consecutive above-threshold finger checks required to
+// declare the finger "warmed up" and admit SpO2 samples to the
+// buffer. 5 × 100 ms = 500 ms — matches the audit's recommended
+// warmup wall-clock and absorbs the few-tick transients the OXullo
+// library emits during finger-on settling.
+constexpr uint16_t MAX30100_FINGER_WARMUP_CHECKS = 5;
+
+// Lock-out after a successful publish. Prevents a borderline
+// finger-on / finger-off / finger-on sequence from publishing two
+// rapid values off residual library state. 5 s is short enough that
+// a citizen who wants a second reading (after legitimate finger
+// repositioning) still gets one inside their MEASURING_VITALS budget,
+// long enough to discriminate from intentional re-takes.
+constexpr unsigned long MAX30100_POST_PUBLISH_COOLDOWN_MS = 5000;
+
 // MLX90640 thermal imager
 // 0.5 Hz frame rate — the sensor itself is configured to match
 // (refresh-rate enum 0x02). Higher rates are noisier; lower rates
